@@ -1,0 +1,983 @@
+openapi: 3.0.3
+info:
+  title: MechHub Miniback API
+  version: 1.0.0
+  description: Standalone backend for MechHub. Authentication is session-based and uses the `mechhub.sid` cookie.
+
+servers:
+  - url: http://localhost:3001
+    description: Local development server
+
+tags:
+  - name: Health
+    description: Service health endpoints
+  - name: Auth
+    description: Authentication and current-user endpoints
+  - name: Users
+    description: Current-user profile endpoints
+  - name: Classes
+    description: Class creation, membership, and role management endpoints
+  - name: SoloChat
+    description: SoloChat conversation, message history, and streaming AI reply endpoints
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: mechhub.sid
+
+  schemas:
+    User:
+      type: object
+      required:
+        - id
+        - email
+        - displayName
+        - avatarUrl
+        - bio
+        - defaultRole
+        - createdAt
+      properties:
+        id:
+          type: integer
+          example: 1
+        email:
+          type: string
+          format: email
+          example: test@example.com
+        displayName:
+          type: string
+          example: MechFox4821
+        avatarUrl:
+          type: string
+          example: https://api.dicebear.com/9.x/pixel-art/svg?seed=MechFox4821
+        bio:
+          type: string
+          example: Building the next mechanics education workflow.
+        defaultRole:
+          type: string
+          enum: [teacher, student]
+          example: student
+        createdAt:
+          type: string
+          example: 2026-03-23 09:00:00.100
+
+    UpdateMeRequest:
+      type: object
+      properties:
+        displayName:
+          type: string
+          maxLength: 100
+          example: StaticNova3141
+        avatarUrl:
+          type: string
+          maxLength: 2048
+          example: https://api.dicebear.com/9.x/pixel-art/svg?seed=StaticNova3141
+        bio:
+          type: string
+          maxLength: 500
+          example: Studying statics and mechanics every day.
+
+    RegisterRequest:
+      type: object
+      required:
+        - email
+        - password
+        - defaultRole
+      properties:
+        email:
+          type: string
+          format: email
+          example: test@example.com
+        password:
+          type: string
+          minLength: 8
+          example: password123
+        defaultRole:
+          type: string
+          enum: [teacher, student]
+          example: student
+
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          example: test@example.com
+        password:
+          type: string
+          example: password123
+
+    LogoutResponse:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          example: Logged out
+
+    HealthResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          example: ok
+
+    ErrorResponse:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          example: Not authenticated
+
+    Class:
+      type: object
+      required:
+        - id
+        - name
+        - description
+        - ownerUserId
+        - inviteCode
+        - status
+        - createdAt
+        - membershipRole
+        - isOwner
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: Statics 101
+        description:
+          type: string
+          example: Introductory statics class for spring term.
+        ownerUserId:
+          type: integer
+          example: 1
+        inviteCode:
+          type: string
+          example: 8F1A2C4D
+        status:
+          type: string
+          enum: [active, archived]
+          example: active
+        createdAt:
+          type: string
+          example: 2026-03-23 09:10:00.200
+        membershipRole:
+          type: string
+          enum: [teacher, student]
+          nullable: true
+          example: teacher
+        isOwner:
+          type: boolean
+          example: true
+
+    CreateClassRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          maxLength: 120
+          example: Statics 101
+        description:
+          type: string
+          maxLength: 1000
+          example: Introductory statics class for spring term.
+
+    JoinClassRequest:
+      type: object
+      required:
+        - inviteCode
+      properties:
+        inviteCode:
+          type: string
+          example: 8F1A2C4D
+
+    UpdateClassMemberRoleRequest:
+      type: object
+      required:
+        - role
+      properties:
+        role:
+          type: string
+          enum: [teacher, student]
+          example: teacher
+
+    ClassMember:
+      type: object
+      required:
+        - id
+        - classId
+        - userId
+        - role
+        - joinedAt
+        - isOwner
+        - user
+      properties:
+        id:
+          type: integer
+          example: 1
+        classId:
+          type: integer
+          example: 1
+        userId:
+          type: integer
+          example: 1
+        role:
+          type: string
+          enum: [teacher, student]
+          example: teacher
+        joinedAt:
+          type: string
+          example: 2026-03-23 09:10:00.250
+        isOwner:
+          type: boolean
+          example: true
+        user:
+          $ref: "#/components/schemas/User"
+
+    SoloChatConversation:
+      type: object
+      required:
+        - id
+        - title
+        - updatedAt
+      properties:
+        id:
+          type: integer
+          example: 1
+        title:
+          type: string
+          example: Force Balance Basics
+        updatedAt:
+          type: string
+          example: 2026-03-23 09:30:00.123
+
+    RenameSoloChatConversationRequest:
+      type: object
+      required:
+        - title
+      properties:
+        title:
+          type: string
+          maxLength: 120
+          example: Statics Week 3 Review
+
+    SoloChatMessage:
+      type: object
+      required:
+        - id
+        - conversationId
+        - role
+        - content
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: integer
+          example: 12
+        conversationId:
+          type: integer
+          example: 1
+        role:
+          type: string
+          enum: [user, assistant]
+          example: assistant
+        content:
+          type: string
+          example: Start by drawing the free-body diagram.
+        status:
+          type: string
+          enum: [streaming, completed, failed]
+          example: completed
+        createdAt:
+          type: string
+          example: 2026-03-23 09:31:00.456
+        updatedAt:
+          type: string
+          example: 2026-03-23 09:31:02.012
+
+    CreateSoloChatMessageRequest:
+      type: object
+      required:
+        - content
+      properties:
+        content:
+          type: string
+          example: Explain free-body diagrams.
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Check service health
+      operationId: getHealth
+      responses:
+        "200":
+          description: Service is running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /auth/register:
+    post:
+      tags:
+        - Auth
+      summary: Register a new user
+      operationId: registerUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: User created and logged in with a generated display name and avatar
+          headers:
+            Set-Cookie:
+              description: Session cookie for the authenticated user
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          description: Invalid email, password, or default role
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Email already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/login:
+    post:
+      tags:
+        - Auth
+      summary: Log in with email and password
+      operationId: loginUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          headers:
+            Set-Cookie:
+              description: Session cookie for the authenticated user
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          description: Missing or invalid fields
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Invalid email or password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/me:
+    get:
+      tags:
+        - Auth
+      summary: Get the current authenticated user
+      operationId: getCurrentUser
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/logout:
+    post:
+      tags:
+        - Auth
+      summary: Log out the current user
+      operationId: logoutUser
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: Logout successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogoutResponse"
+
+  /users/me:
+    get:
+      tags:
+        - Users
+      summary: Get the current user's profile
+      operationId: getMyProfile
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: Current user profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    patch:
+      tags:
+        - Users
+      summary: Update the current user's editable profile fields
+      operationId: updateMyProfile
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMeRequest"
+      responses:
+        "200":
+          description: Updated user profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          description: Invalid profile fields
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /classes:
+    get:
+      tags:
+        - Classes
+      summary: List classes the current user has joined
+      operationId: listClasses
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: Class list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Class"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    post:
+      tags:
+        - Classes
+      summary: Create a class
+      operationId: createClass
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateClassRequest"
+      responses:
+        "201":
+          description: Class created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Class"
+        "400":
+          description: Invalid class fields
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Only teachers can create classes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /classes/join:
+    post:
+      tags:
+        - Classes
+      summary: Join a class by invite code
+      operationId: joinClass
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JoinClassRequest"
+      responses:
+        "201":
+          description: Joined class
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Class"
+        "400":
+          description: Invalid invite code
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Class not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: User has already joined the class
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /classes/{classId}:
+    get:
+      tags:
+        - Classes
+      summary: Get a joined class
+      operationId: getClass
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: classId
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Class detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Class"
+        "400":
+          description: Invalid class id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Class not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /classes/{classId}/members:
+    get:
+      tags:
+        - Classes
+      summary: List members of a joined class
+      operationId: listClassMembers
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: classId
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Class members
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ClassMember"
+        "400":
+          description: Invalid class id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Class not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /classes/{classId}/members/{memberId}:
+    patch:
+      tags:
+        - Classes
+      summary: Update a member's class role
+      operationId: updateClassMemberRole
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: classId
+          required: true
+          schema:
+            type: integer
+        - in: path
+          name: memberId
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateClassMemberRoleRequest"
+      responses:
+        "200":
+          description: Updated class member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClassMember"
+        "400":
+          description: Invalid ids, role, or attempted owner role change
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Only the class owner can update member roles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Class or member not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /solochat/conversations:
+    get:
+      tags:
+        - SoloChat
+      summary: Get the current user's SoloChat conversations
+      operationId: listSoloChatConversations
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: SoloChat conversations ordered by latest activity
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SoloChatConversation"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    post:
+      tags:
+        - SoloChat
+      summary: Create a new empty SoloChat conversation
+      operationId: createSoloChatConversation
+      security:
+        - cookieAuth: []
+      responses:
+        "201":
+          description: Conversation created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SoloChatConversation"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /solochat/conversations/{conversationId}:
+    patch:
+      tags:
+        - SoloChat
+      summary: Rename a SoloChat conversation
+      operationId: renameSoloChatConversation
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: conversationId
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenameSoloChatConversationRequest"
+      responses:
+        "200":
+          description: Conversation renamed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SoloChatConversation"
+        "400":
+          description: Invalid conversation id or title
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    delete:
+      tags:
+        - SoloChat
+      summary: Delete a SoloChat conversation
+      operationId: deleteSoloChatConversation
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: conversationId
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Conversation deleted
+        "400":
+          description: Invalid conversation id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /solochat/conversations/{conversationId}/messages:
+    get:
+      tags:
+        - SoloChat
+      summary: Get all messages for a SoloChat conversation
+      operationId: listSoloChatMessages
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: conversationId
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Conversation messages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SoloChatMessage"
+        "400":
+          description: Invalid conversation id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /solochat/conversations/{conversationId}/messages/stream:
+    post:
+      tags:
+        - SoloChat
+      summary: Store the user message and stream the assistant reply
+      description: >
+        Persists the user message immediately, creates an assistant placeholder
+        message with `status=streaming`, then streams newline-delimited JSON
+        events while the AI reply is generated. The user message is not returned
+        in the stream response.
+      operationId: streamSoloChatMessage
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: conversationId
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSoloChatMessageRequest"
+      responses:
+        "200":
+          description: NDJSON stream of assistant events
+          content:
+            application/x-ndjson:
+              schema:
+                type: string
+                example: |
+                  {"type":"assistant_start","message":{"id":2,"conversationId":1,"role":"assistant","content":"","status":"streaming","createdAt":"2026-03-23 09:31:00.500","updatedAt":"2026-03-23 09:31:00.500"}}
+                  {"type":"assistant_delta","messageId":2,"delta":"Start by drawing "}
+                  {"type":"assistant_delta","messageId":2,"delta":"the free-body diagram."}
+                  {"type":"conversation_title","conversation":{"id":1,"title":"Free-Body Diagram Basics","updatedAt":"2026-03-23 09:31:02.100"}}
+                  {"type":"assistant_done","message":{"id":2,"conversationId":1,"role":"assistant","content":"Start by drawing the free-body diagram.","status":"completed","createdAt":"2026-03-23 09:31:00.500","updatedAt":"2026-03-23 09:31:02.050"}}
+        "400":
+          description: Invalid conversation id or message content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error or missing AI configuration before the stream starts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"

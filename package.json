@@ -1,0 +1,24 @@
+{
+  "name": "mechhub-miniback",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone auth backend for MechHub",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.2",
+    "express": "^4.21.2",
+    "express-session": "^1.18.1",
+    "memorystore": "^1.6.7",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^6.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  }
+}

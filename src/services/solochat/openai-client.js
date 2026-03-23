@@ -1,0 +1,247 @@
+function createOpenAiCompatibleClient() {
+    const baseUrl = normalizeBaseUrl(process.env.OPENAI_BASE_URL);
+    const apiKey = process.env.OPENAI_API_KEY;
+    const defaultModel = process.env.OPENAI_MODEL;
+    const timeoutMs = Number(process.env.OPENAI_TIMEOUT_MS || 30000);
+
+    async function createChatCompletion({
+        messages,
+        temperature = 0.7,
+        model,
+        maxTokens,
+    }) {
+        const resolvedModel = validateConfig(model);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+            const response = await fetch(`${baseUrl}/chat/completions`, {
+                method: "POST",
+                headers: {
+                    Authorization: `Bearer ${apiKey}`,
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    model: resolvedModel,
+                    messages,
+                    temperature,
+                    ...(maxTokens ? { max_tokens: maxTokens } : {}),
+                }),
+                signal: controller.signal,
+            });
+
+            const payload = await response.json().catch(() => null);
+
+            if (!response.ok) {
+                throw upstreamError(
+                    payload?.error?.message ||
+                        payload?.message ||
+                        `Upstream AI request failed with status ${response.status}`,
+                );
+            }
+
+            const content = extractMessageContent(
+                payload?.choices?.[0]?.message?.content,
+                {
+                    trim: true,
+                },
+            );
+
+            if (!content) {
+                throw upstreamError("AI response did not include any content");
+            }
+
+            return content;
+        } catch (error) {
+            if (error.name === "AbortError") {
+                throw timeoutError();
+            }
+
+            throw error;
+        } finally {
+            clearTimeout(timeout);
+        }
+    }
+
+    async function* streamChatCompletion({
+        messages,
+        temperature = 0.7,
+        model,
+    }) {
+        const resolvedModel = validateConfig(model);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+            const response = await fetch(`${baseUrl}/chat/completions`, {
+                method: "POST",
+                headers: {
+                    Authorization: `Bearer ${apiKey}`,
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    model: resolvedModel,
+                    messages,
+                    temperature,
+                    stream: true,
+                }),
+                signal: controller.signal,
+            });
+
+            if (!response.ok) {
+                const payload = await response.json().catch(() => null);
+                throw upstreamError(
+                    payload?.error?.message ||
+                        payload?.message ||
+                        `Upstream AI request failed with status ${response.status}`,
+                );
+            }
+
+            if (!response.body) {
+                throw upstreamError("AI stream did not include a response body");
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+
+            while (true) {
+                const { done, value } = await reader.read();
+
+                if (done) {
+                    break;
+                }
+
+                buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+                const events = buffer.split("\n\n");
+                buffer = events.pop() || "";
+
+                for (const event of events) {
+                    const data = readSseData(event);
+
+                    if (!data) {
+                        continue;
+                    }
+
+                    if (data === "[DONE]") {
+                        return;
+                    }
+
+                    const payload = JSON.parse(data);
+                    const delta = extractMessageContent(
+                        payload?.choices?.[0]?.delta?.content,
+                        {
+                            trim: false,
+                        },
+                    );
+
+                    if (delta) {
+                        yield delta;
+                    }
+                }
+            }
+
+            const finalData = readSseData(buffer);
+
+            if (finalData && finalData !== "[DONE]") {
+                const payload = JSON.parse(finalData);
+                const delta = extractMessageContent(payload?.choices?.[0]?.delta?.content, {
+                    trim: false,
+                });
+
+                if (delta) {
+                    yield delta;
+                }
+            }
+        } catch (error) {
+            if (error.name === "AbortError") {
+                throw timeoutError();
+            }
+
+            throw error;
+        } finally {
+            clearTimeout(timeout);
+        }
+    }
+
+    function validateConfig(model) {
+        if (!baseUrl) {
+            throw configurationError("OPENAI_BASE_URL is required");
+        }
+
+        if (!apiKey) {
+            throw configurationError("OPENAI_API_KEY is required");
+        }
+
+        const resolvedModel = model || defaultModel;
+
+        if (!resolvedModel) {
+            throw configurationError("OPENAI_MODEL is required");
+        }
+
+        return resolvedModel;
+    }
+
+    return {
+        createChatCompletion,
+        streamChatCompletion,
+    };
+}
+
+function normalizeBaseUrl(value) {
+    const normalized = String(value || "").trim().replace(/\/+$/, "");
+    return normalized || "";
+}
+
+function extractMessageContent(content, options = {}) {
+    const trim = options.trim !== false;
+
+    if (typeof content === "string") {
+        return trim ? content.trim() : content;
+    }
+
+    if (Array.isArray(content)) {
+        const text = content
+            .filter((item) => item?.type === "text" && typeof item.text === "string")
+            .map((item) => item.text)
+            .join("");
+
+        return trim ? text.trim() : text;
+    }
+
+    return "";
+}
+
+function readSseData(event) {
+    return event
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trim())
+        .join("\n")
+        .trim();
+}
+
+function configurationError(message) {
+    const error = new Error(message);
+    error.statusCode = 500;
+    error.expose = true;
+    return error;
+}
+
+function upstreamError(message) {
+    const error = new Error(message);
+    error.statusCode = 502;
+    error.expose = true;
+    return error;
+}
+
+function timeoutError() {
+    const error = new Error("AI request timed out");
+    error.statusCode = 504;
+    error.expose = true;
+    return error;
+}
+
+module.exports = {
+    createOpenAiCompatibleClient,
+};
