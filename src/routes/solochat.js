@@ -1,5 +1,6 @@
 const express = require("express");
 const multer = require("multer");
+const { withImmediateTransaction } = require("../lib/db");
 const { toIsoTimestamp } = require("../lib/time");
 const {
     createSoloChatConversationService,
@@ -298,6 +299,7 @@ function createSoloChatRouter(db) {
         try {
             const userId = requireUserId(req);
             await imageService.purgeStaleUnattachedImages({ userId });
+            await imageService.purgeOrphanedFiles({ userId });
             await singleFileUpload(req, res);
             const image = await imageService.processUpload({
                 userId,
@@ -354,7 +356,6 @@ function createSoloChatRouter(db) {
             let streamStarted = false;
             let assistantMessage = null;
             let assistantContentBuffer = "";
-            let transactionStarted = false;
 
             try {
                 const userId = requireUserId(req);
@@ -381,27 +382,27 @@ function createSoloChatRouter(db) {
                 }
 
                 await imageService.purgeStaleUnattachedImages({ userId });
-                await db.exec("BEGIN IMMEDIATE TRANSACTION");
-                transactionStarted = true;
-
-                const userMessage = await conversationService.createMessage({
-                    conversationId,
-                    role: "user",
-                    content,
-                    status: "completed",
-                });
-
-                if (imageId) {
-                    await imageService.attachImageToMessage({
-                        imageId,
-                        userId,
-                        messageId: userMessage.id,
+                await imageService.purgeOrphanedFiles({ userId });
+                await withImmediateTransaction(async (txDb) => {
+                    const txConversationService = createSoloChatConversationService(txDb);
+                    const txImageService = createSoloChatImageService(txDb);
+                    const userMessage = await txConversationService.createMessage({
+                        conversationId,
+                        role: "user",
+                        content,
+                        status: "completed",
                     });
-                }
 
-                await conversationService.touchConversation(conversationId);
-                await db.exec("COMMIT");
-                transactionStarted = false;
+                    if (imageId) {
+                        await txImageService.attachImageToMessage({
+                            imageId,
+                            userId,
+                            messageId: userMessage.id,
+                        });
+                    }
+
+                    await txConversationService.touchConversation(conversationId);
+                });
 
                 const history = await conversationService.listMessages(conversationId);
                 assistantMessage = await conversationService.createMessage({
@@ -465,14 +466,6 @@ function createSoloChatRouter(db) {
 
                 return res.end();
             } catch (error) {
-                if (transactionStarted) {
-                    try {
-                        await db.exec("ROLLBACK");
-                    } catch (rollbackError) {
-                        error.rollbackError = rollbackError;
-                    }
-                }
-
                 if (streamStarted) {
                     if (assistantMessage) {
                         assistantMessage = await conversationService.updateMessage({

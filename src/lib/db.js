@@ -5,6 +5,7 @@ const { open } = require("sqlite");
 const { SQLITE_NOW_ISO_EXPRESSION } = require("./time");
 
 let dbPromise;
+const SQLITE_BUSY_TIMEOUT_MS = 5000;
 
 function resolveDbPath() {
     const configuredPath = process.env.DB_PATH || "./data/app.sqlite";
@@ -16,18 +17,33 @@ function resolveDbPath() {
 
 async function initDb() {
     if (!dbPromise) {
-        const filename = resolveDbPath();
-        fs.mkdirSync(path.dirname(filename), { recursive: true });
-
-        dbPromise = open({
-            filename,
-            driver: sqlite3.Database,
-        });
+        dbPromise = openDbConnection();
     }
 
     const db = await dbPromise;
-    await db.exec("PRAGMA foreign_keys = ON");
+    await prepareDb(db);
 
+    return db;
+}
+
+async function openDbConnection() {
+    const filename = resolveDbPath();
+    fs.mkdirSync(path.dirname(filename), { recursive: true });
+
+    const db = await open({
+        filename,
+        driver: sqlite3.Database,
+    });
+
+    await db.exec(`
+        PRAGMA foreign_keys = ON;
+        PRAGMA journal_mode = WAL;
+        PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS};
+    `);
+    return db;
+}
+
+async function prepareDb(db) {
     await db.exec(`
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,8 +56,26 @@ async function initDb() {
     await ensureUserProfileColumns(db);
     await ensureSoloChatTables(db);
     await ensureClassTables(db);
+}
 
-    return db;
+async function withImmediateTransaction(work) {
+    const db = await openDbConnection();
+
+    try {
+        await db.exec("BEGIN IMMEDIATE TRANSACTION");
+        const result = await work(db);
+        await db.exec("COMMIT");
+        return result;
+    } catch (error) {
+        try {
+            await db.exec("ROLLBACK");
+        } catch (rollbackError) {
+            error.rollbackError = rollbackError;
+        }
+        throw error;
+    } finally {
+        await db.close();
+    }
 }
 
 async function ensureUserProfileColumns(db) {
@@ -173,4 +207,7 @@ async function ensureClassTables(db) {
 
 module.exports = {
     initDb,
+    openDbConnection,
+    SQLITE_BUSY_TIMEOUT_MS,
+    withImmediateTransaction,
 };

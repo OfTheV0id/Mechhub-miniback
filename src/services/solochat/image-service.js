@@ -2,6 +2,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const sharp = require("sharp");
+const { withImmediateTransaction } = require("../../lib/db");
 const { SQLITE_NOW_ISO_EXPRESSION } = require("../../lib/time");
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
@@ -57,15 +58,23 @@ function createSoloChatImageService(db, options = {}) {
 
             await fs.mkdir(path.dirname(absolutePath), { recursive: true });
             await fs.writeFile(absolutePath, outputBuffer);
-
-            return createImageRecord({
-                userId,
-                storagePath: absolutePath,
-                mimeType: "image/webp",
-                width: outputMetadata.width || width,
-                height: outputMetadata.height || height,
-                sizeBytes: outputBuffer.length,
-            });
+            try {
+                return await createImageRecord({
+                    userId,
+                    storagePath: absolutePath,
+                    mimeType: "image/webp",
+                    width: outputMetadata.width || width,
+                    height: outputMetadata.height || height,
+                    sizeBytes: outputBuffer.length,
+                });
+            } catch (error) {
+                await deleteStoredFilesBestEffort([
+                    {
+                        storage_path: absolutePath,
+                    },
+                ]);
+                throw error;
+            }
         } catch (error) {
             if (error.statusCode) {
                 throw error;
@@ -176,27 +185,42 @@ function createSoloChatImageService(db, options = {}) {
     }
 
     async function deleteUnattachedImageForUser({ imageId, userId }) {
-        const image = await getImageForUser({
-            imageId,
-            userId,
+        const deletedImage = await withImmediateTransaction(async (txDb) => {
+            const image = await txDb.get(
+                `SELECT id, user_id, message_id, storage_path, mime_type, width, height, size_bytes, created_at
+                 FROM solochat_images
+                 WHERE id = ? AND user_id = ?`,
+                imageId,
+                userId,
+            );
+
+            if (!image) {
+                return null;
+            }
+
+            if (image.message_id) {
+                throw conflictError("Attached images cannot be deleted");
+            }
+
+            const result = await txDb.run(
+                `DELETE FROM solochat_images
+                 WHERE id = ? AND user_id = ? AND message_id IS NULL`,
+                imageId,
+                userId,
+            );
+
+            if (!result.changes) {
+                return null;
+            }
+
+            return image;
         });
 
-        if (!image) {
+        if (!deletedImage) {
             return false;
         }
 
-        if (image.message_id) {
-            throw conflictError("Attached images cannot be deleted");
-        }
-
-        await deleteStoredFiles([image]);
-        await db.run(
-            `DELETE FROM solochat_images
-             WHERE id = ? AND user_id = ? AND message_id IS NULL`,
-            imageId,
-            userId,
-        );
-
+        await deleteStoredFilesBestEffort([deletedImage]);
         return true;
     }
 
@@ -205,28 +229,116 @@ function createSoloChatImageService(db, options = {}) {
         olderThanMs = STALE_UNATTACHED_IMAGE_AGE_MS,
     }) {
         const cutoffIso = new Date(Date.now() - olderThanMs).toISOString();
-        const images = await db.all(
-            `SELECT id, user_id, message_id, storage_path, mime_type, width, height, size_bytes, created_at
-             FROM solochat_images
-             WHERE user_id = ? AND message_id IS NULL AND created_at < ?`,
-            userId,
-            cutoffIso,
-        );
+        const images = await withImmediateTransaction(async (txDb) => {
+            const staleImages = await txDb.all(
+                `SELECT id, user_id, message_id, storage_path, mime_type, width, height, size_bytes, created_at
+                 FROM solochat_images
+                 WHERE user_id = ? AND message_id IS NULL AND created_at < ?`,
+                userId,
+                cutoffIso,
+            );
+
+            if (!staleImages.length) {
+                return [];
+            }
+
+            const placeholders = staleImages.map(() => "?").join(", ");
+            const result = await txDb.run(
+                `DELETE FROM solochat_images
+                 WHERE id IN (${placeholders}) AND user_id = ? AND message_id IS NULL`,
+                ...staleImages.map((image) => image.id),
+                userId,
+            );
+
+            if (!result.changes) {
+                return [];
+            }
+
+            if (result.changes === staleImages.length) {
+                return staleImages;
+            }
+
+            const deletedIds = new Set();
+
+            for (const image of staleImages) {
+                const remaining = await txDb.get(
+                    `SELECT id
+                     FROM solochat_images
+                     WHERE id = ?`,
+                    image.id,
+                );
+
+                if (!remaining) {
+                    deletedIds.add(image.id);
+                }
+            }
+
+            return staleImages.filter((image) => deletedIds.has(image.id));
+        });
 
         if (!images.length) {
             return 0;
         }
 
-        await deleteStoredFiles(images);
-
-        const placeholders = images.map(() => "?").join(", ");
-        await db.run(
-            `DELETE FROM solochat_images
-             WHERE id IN (${placeholders})`,
-            ...images.map((image) => image.id),
-        );
-
+        await deleteStoredFilesBestEffort(images);
         return images.length;
+    }
+
+    async function purgeOrphanedFiles({
+        userId,
+        olderThanMs = STALE_UNATTACHED_IMAGE_AGE_MS,
+    }) {
+        const userDirectory = path.join(uploadsRoot, String(userId));
+        const cutoffTime = Date.now() - olderThanMs;
+        const referencedImages = await db.all(
+            `SELECT storage_path
+             FROM solochat_images
+             WHERE user_id = ?`,
+            userId,
+        );
+        const referencedPaths = new Set(
+            referencedImages.map((image) => path.normalize(image.storage_path)),
+        );
+        let entries;
+
+        try {
+            entries = await fs.readdir(userDirectory, {
+                withFileTypes: true,
+            });
+        } catch (error) {
+            if (error.code === "ENOENT") {
+                return 0;
+            }
+
+            throw error;
+        }
+
+        const orphanFiles = [];
+
+        for (const entry of entries) {
+            if (!entry.isFile()) {
+                continue;
+            }
+
+            const absolutePath = path.join(userDirectory, entry.name);
+
+            if (referencedPaths.has(path.normalize(absolutePath))) {
+                continue;
+            }
+
+            const stats = await fs.stat(absolutePath);
+
+            if (stats.mtimeMs >= cutoffTime) {
+                continue;
+            }
+
+            orphanFiles.push({
+                storage_path: absolutePath,
+            });
+        }
+
+        await deleteStoredFilesBestEffort(orphanFiles);
+        return orphanFiles.length;
     }
 
     async function deleteStoredFiles(images) {
@@ -237,6 +349,23 @@ function createSoloChatImageService(db, options = {}) {
                 } catch (error) {
                     if (error.code !== "ENOENT") {
                         throw error;
+                    }
+                }
+            }),
+        );
+    }
+
+    async function deleteStoredFilesBestEffort(images) {
+        await Promise.all(
+            images.map(async (image) => {
+                try {
+                    await fs.unlink(image.storage_path);
+                } catch (error) {
+                    if (error.code !== "ENOENT") {
+                        console.warn(
+                            `Failed to delete SoloChat image file: ${image.storage_path}`,
+                            error,
+                        );
                     }
                 }
             }),
@@ -261,6 +390,7 @@ function createSoloChatImageService(db, options = {}) {
         getImageForUser,
         listImagesForConversation,
         listImagesForMessageIds,
+        purgeOrphanedFiles,
         purgeStaleUnattachedImages,
         processUpload,
     };
