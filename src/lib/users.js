@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { toIsoTimestamp } = require("./time");
 
 const USER_ROLES = {
     TEACHER: "teacher",
@@ -39,7 +40,7 @@ function sanitizeUser(user) {
         avatarUrl: user.avatar_url,
         bio: user.bio,
         defaultRole: user.default_role,
-        createdAt: user.created_at,
+        createdAt: toIsoTimestamp(user.created_at),
     };
 }
 

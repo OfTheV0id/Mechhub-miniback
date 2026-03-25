@@ -1,5 +1,7 @@
+const { SQLITE_NOW_ISO_EXPRESSION } = require("../../lib/time");
+
 function createClassService(db) {
-    const nowExpression = `STRFTIME('%Y-%m-%d %H:%M:%f', 'now')`;
+    const nowExpression = SQLITE_NOW_ISO_EXPRESSION;
 
     async function createClass({ ownerUserId, name, description, role, inviteCode }) {
         const result = await db.run(

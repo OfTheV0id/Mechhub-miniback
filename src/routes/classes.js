@@ -7,6 +7,7 @@ const {
     parseUserRole,
     sanitizeUser,
 } = require("../lib/users");
+const { toIsoTimestamp } = require("../lib/time");
 
 function badRequest(message) {
     const error = new Error(message);
@@ -112,7 +113,7 @@ function sanitizeClassRecord(classRecord) {
         ownerUserId: classRecord.owner_user_id,
         inviteCode: classRecord.invite_code,
         status: classRecord.status,
-        createdAt: classRecord.created_at,
+        createdAt: toIsoTimestamp(classRecord.created_at),
         membershipRole: classRecord.membership_role || null,
         isOwner: classRecord.owner_user_id === classRecord.current_user_id,
     };
@@ -124,7 +125,7 @@ function sanitizeMembership(member, ownerUserId) {
         classId: member.class_id,
         userId: member.user_id,
         role: member.role,
-        joinedAt: member.joined_at,
+        joinedAt: toIsoTimestamp(member.joined_at),
         isOwner: member.user_id === ownerUserId,
         user: sanitizeUser({
             id: member.user_id,

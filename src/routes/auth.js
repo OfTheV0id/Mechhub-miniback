@@ -1,5 +1,6 @@
 const express = require("express");
 const bcrypt = require("bcrypt");
+const { SQLITE_NOW_ISO_EXPRESSION } = require("../lib/time");
 const {
     buildUserSelectQuery,
     generateDefaultProfile,
@@ -66,7 +67,7 @@ function createAuthRouter(db) {
                      default_role,
                      created_at
                  )
-                 VALUES (?, ?, ?, ?, ?, STRFTIME('%Y-%m-%d %H:%M:%f', 'now'))`,
+                 VALUES (?, ?, ?, ?, ?, ${SQLITE_NOW_ISO_EXPRESSION})`,
                 email,
                 passwordHash,
                 defaultProfile.displayName,
