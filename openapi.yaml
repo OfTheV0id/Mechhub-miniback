@@ -61,7 +61,8 @@ components:
           example: student
         createdAt:
           type: string
-          example: 2026-03-23 09:00:00.100
+          format: date-time
+          example: 2026-03-23T09:00:00.100Z
 
     UpdateMeRequest:
       type: object
@@ -174,7 +175,8 @@ components:
           example: active
         createdAt:
           type: string
-          example: 2026-03-23 09:10:00.200
+          format: date-time
+          example: 2026-03-23T09:10:00.200Z
         membershipRole:
           type: string
           enum: [teacher, student]
@@ -243,7 +245,8 @@ components:
           example: teacher
         joinedAt:
           type: string
-          example: 2026-03-23 09:10:00.250
+          format: date-time
+          example: 2026-03-23T09:10:00.250Z
         isOwner:
           type: boolean
           example: true
@@ -265,7 +268,8 @@ components:
           example: Force Balance Basics
         updatedAt:
           type: string
-          example: 2026-03-23 09:30:00.123
+          format: date-time
+          example: 2026-03-23T09:30:00.123Z
 
     RenameSoloChatConversationRequest:
       type: object
@@ -285,6 +289,7 @@ components:
         - role
         - content
         - status
+        - attachments
         - createdAt
         - updatedAt
       properties:
@@ -305,21 +310,101 @@ components:
           type: string
           enum: [streaming, completed, failed]
           example: completed
+        attachments:
+          type: array
+          items:
+            $ref: "#/components/schemas/SoloChatImageAttachment"
         createdAt:
           type: string
-          example: 2026-03-23 09:31:00.456
+          format: date-time
+          example: 2026-03-23T09:31:00.456Z
         updatedAt:
           type: string
-          example: 2026-03-23 09:31:02.012
+          format: date-time
+          example: 2026-03-23T09:31:02.012Z
 
     CreateSoloChatMessageRequest:
       type: object
-      required:
-        - content
       properties:
         content:
           type: string
           example: Explain free-body diagrams.
+        imageId:
+          type: integer
+          example: 7
+
+    SoloChatImageAttachment:
+      type: object
+      required:
+        - id
+        - kind
+        - url
+        - mimeType
+        - width
+        - height
+        - sizeBytes
+        - createdAt
+      properties:
+        id:
+          type: integer
+          example: 7
+        kind:
+          type: string
+          enum: [image]
+          example: image
+        url:
+          type: string
+          example: /solochat/images/7
+        mimeType:
+          type: string
+          example: image/webp
+        width:
+          type: integer
+          example: 1536
+        height:
+          type: integer
+          example: 1024
+        sizeBytes:
+          type: integer
+          example: 482913
+        createdAt:
+          type: string
+          format: date-time
+          example: 2026-03-25T09:31:00.456Z
+
+    SoloChatUploadedImage:
+      type: object
+      required:
+        - id
+        - url
+        - mimeType
+        - width
+        - height
+        - sizeBytes
+        - createdAt
+      properties:
+        id:
+          type: integer
+          example: 7
+        url:
+          type: string
+          example: /solochat/images/7
+        mimeType:
+          type: string
+          example: image/webp
+        width:
+          type: integer
+          example: 1536
+        height:
+          type: integer
+          example: 1024
+        sizeBytes:
+          type: integer
+          example: 482913
+        createdAt:
+          type: string
+          format: date-time
+          example: 2026-03-25T09:31:00.456Z
 
 paths:
   /health:
@@ -919,6 +1004,115 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /solochat/uploads/images:
+    post:
+      tags:
+        - SoloChat
+      summary: Upload and normalize a SoloChat image
+      operationId: uploadSoloChatImage
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - image
+              properties:
+                image:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: Image uploaded and converted to WebP
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SoloChatUploadedImage"
+        "400":
+          description: Unsupported or oversized image
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /solochat/images/{imageId}:
+    get:
+      tags:
+        - SoloChat
+      summary: Load a previously uploaded SoloChat image
+      operationId: getSoloChatImage
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: imageId
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: WebP image file
+          content:
+            image/webp:
+              schema:
+                type: string
+                format: binary
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Image not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      tags:
+        - SoloChat
+      summary: Delete an unattached SoloChat image
+      operationId: deleteSoloChatImage
+      security:
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: imageId
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Image deleted
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Image not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Image is already attached to a message
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /solochat/conversations/{conversationId}/messages/stream:
     post:
       tags:
@@ -952,11 +1146,11 @@ paths:
               schema:
                 type: string
                 example: |
-                  {"type":"assistant_start","message":{"id":2,"conversationId":1,"role":"assistant","content":"","status":"streaming","createdAt":"2026-03-23 09:31:00.500","updatedAt":"2026-03-23 09:31:00.500"}}
+                  {"type":"assistant_start","message":{"id":2,"conversationId":1,"role":"assistant","content":"","status":"streaming","attachments":[],"createdAt":"2026-03-23T09:31:00.500Z","updatedAt":"2026-03-23T09:31:00.500Z"}}
                   {"type":"assistant_delta","messageId":2,"delta":"Start by drawing "}
                   {"type":"assistant_delta","messageId":2,"delta":"the free-body diagram."}
-                  {"type":"conversation_title","conversation":{"id":1,"title":"Free-Body Diagram Basics","updatedAt":"2026-03-23 09:31:02.100"}}
-                  {"type":"assistant_done","message":{"id":2,"conversationId":1,"role":"assistant","content":"Start by drawing the free-body diagram.","status":"completed","createdAt":"2026-03-23 09:31:00.500","updatedAt":"2026-03-23 09:31:02.050"}}
+                  {"type":"conversation_title","conversation":{"id":1,"title":"Free-Body Diagram Basics","updatedAt":"2026-03-23T09:31:02.100Z"}}
+                  {"type":"assistant_done","message":{"id":2,"conversationId":1,"role":"assistant","content":"Start by drawing the free-body diagram.","status":"completed","attachments":[],"createdAt":"2026-03-23T09:31:00.500Z","updatedAt":"2026-03-23T09:31:02.050Z"}}
         "400":
           description: Invalid conversation id or message content
           content:

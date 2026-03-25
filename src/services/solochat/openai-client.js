@@ -2,7 +2,11 @@ function createOpenAiCompatibleClient() {
     const baseUrl = normalizeBaseUrl(process.env.OPENAI_BASE_URL);
     const apiKey = process.env.OPENAI_API_KEY;
     const defaultModel = process.env.OPENAI_MODEL;
-    const timeoutMs = Number(process.env.OPENAI_TIMEOUT_MS || 30000);
+    const timeoutMs = parseTimeoutMs(process.env.OPENAI_TIMEOUT_MS, 30000);
+    const streamTimeoutMs = parseTimeoutMs(
+        process.env.OPENAI_STREAM_TIMEOUT_MS,
+        0,
+    );
 
     async function createChatCompletion({
         messages,
@@ -11,11 +15,12 @@ function createOpenAiCompatibleClient() {
         maxTokens,
     }) {
         const resolvedModel = validateConfig(model);
+        const chatCompletionsUrl = resolveChatCompletionsUrl(baseUrl);
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), timeoutMs);
+        const timeout = startAbortTimer(controller, timeoutMs);
 
         try {
-            const response = await fetch(`${baseUrl}/chat/completions`, {
+            const response = await fetch(chatCompletionsUrl, {
                 method: "POST",
                 headers: {
                     Authorization: `Bearer ${apiKey}`,
@@ -59,7 +64,7 @@ function createOpenAiCompatibleClient() {
 
             throw error;
         } finally {
-            clearTimeout(timeout);
+            clearAbortTimer(timeout);
         }
     }
 
@@ -69,11 +74,12 @@ function createOpenAiCompatibleClient() {
         model,
     }) {
         const resolvedModel = validateConfig(model);
+        const chatCompletionsUrl = resolveChatCompletionsUrl(baseUrl);
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), timeoutMs);
+        let timeout = startAbortTimer(controller, streamTimeoutMs);
 
         try {
-            const response = await fetch(`${baseUrl}/chat/completions`, {
+            const response = await fetch(chatCompletionsUrl, {
                 method: "POST",
                 headers: {
                     Authorization: `Bearer ${apiKey}`,
@@ -98,7 +104,9 @@ function createOpenAiCompatibleClient() {
             }
 
             if (!response.body) {
-                throw upstreamError("AI stream did not include a response body");
+                throw upstreamError(
+                    "AI stream did not include a response body",
+                );
             }
 
             const reader = response.body.getReader();
@@ -107,12 +115,19 @@ function createOpenAiCompatibleClient() {
 
             while (true) {
                 const { done, value } = await reader.read();
+                timeout = refreshAbortTimer(
+                    controller,
+                    timeout,
+                    streamTimeoutMs,
+                );
 
                 if (done) {
                     break;
                 }
 
-                buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+                buffer += decoder
+                    .decode(value, { stream: true })
+                    .replace(/\r\n/g, "\n");
                 const events = buffer.split("\n\n");
                 buffer = events.pop() || "";
 
@@ -145,9 +160,12 @@ function createOpenAiCompatibleClient() {
 
             if (finalData && finalData !== "[DONE]") {
                 const payload = JSON.parse(finalData);
-                const delta = extractMessageContent(payload?.choices?.[0]?.delta?.content, {
-                    trim: false,
-                });
+                const delta = extractMessageContent(
+                    payload?.choices?.[0]?.delta?.content,
+                    {
+                        trim: false,
+                    },
+                );
 
                 if (delta) {
                     yield delta;
@@ -160,7 +178,7 @@ function createOpenAiCompatibleClient() {
 
             throw error;
         } finally {
-            clearTimeout(timeout);
+            clearAbortTimer(timeout);
         }
     }
 
@@ -189,8 +207,18 @@ function createOpenAiCompatibleClient() {
 }
 
 function normalizeBaseUrl(value) {
-    const normalized = String(value || "").trim().replace(/\/+$/, "");
+    const normalized = String(value || "")
+        .trim()
+        .replace(/\/+$/, "");
     return normalized || "";
+}
+
+function resolveChatCompletionsUrl(baseUrl) {
+    if (baseUrl.endsWith("/chat/completions")) {
+        return baseUrl;
+    }
+
+    return `${baseUrl}/chat/completions`;
 }
 
 function extractMessageContent(content, options = {}) {
@@ -202,7 +230,10 @@ function extractMessageContent(content, options = {}) {
 
     if (Array.isArray(content)) {
         const text = content
-            .filter((item) => item?.type === "text" && typeof item.text === "string")
+            .filter(
+                (item) =>
+                    item?.type === "text" && typeof item.text === "string",
+            )
             .map((item) => item.text)
             .join("");
 
@@ -219,6 +250,35 @@ function readSseData(event) {
         .map((line) => line.slice(5).trim())
         .join("\n")
         .trim();
+}
+
+function parseTimeoutMs(value, fallbackMs) {
+    const parsed = Number(value);
+
+    if (!Number.isFinite(parsed) || parsed < 0) {
+        return fallbackMs;
+    }
+
+    return Math.trunc(parsed);
+}
+
+function startAbortTimer(controller, timeoutMs) {
+    if (timeoutMs <= 0) {
+        return null;
+    }
+
+    return setTimeout(() => controller.abort(), timeoutMs);
+}
+
+function clearAbortTimer(timeout) {
+    if (timeout) {
+        clearTimeout(timeout);
+    }
+}
+
+function refreshAbortTimer(controller, timeout, timeoutMs) {
+    clearAbortTimer(timeout);
+    return startAbortTimer(controller, timeoutMs);
 }
 
 function configurationError(message) {

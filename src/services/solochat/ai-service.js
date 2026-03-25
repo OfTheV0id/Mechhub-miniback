@@ -2,12 +2,14 @@ const { createOpenAiCompatibleClient } = require("./openai-client");
 
 function createSoloChatAiService(options = {}) {
     const client = options.client || createOpenAiCompatibleClient();
+    const imageService = options.imageService || null;
 
     async function streamAssistantTurn({ conversation, messages, onDelta }) {
         let assistantContent = "";
+        const replyMessages = await buildReplyMessages(messages, imageService);
 
         for await (const delta of client.streamChatCompletion({
-            messages: buildReplyMessages(messages),
+            messages: replyMessages,
             temperature: 0.6,
         })) {
             assistantContent += delta;
@@ -44,18 +46,56 @@ function createSoloChatAiService(options = {}) {
     };
 }
 
-function buildReplyMessages(messages) {
-    return [
+async function buildReplyMessages(messages, imageService) {
+    const replyMessages = [
         {
             role: "system",
             content:
                 "You are MechHub SoloChat, a concise mechanics learning assistant. Give direct, accurate help for engineering and study questions. Prefer clear steps and practical explanation over long essays.",
         },
-        ...messages.map((message) => ({
-            role: message.role,
-            content: message.content,
-        })),
     ];
+
+    for (const message of messages) {
+        replyMessages.push({
+            role: message.role,
+            content: await buildMessageContent(message, imageService),
+        });
+    }
+
+    return replyMessages;
+}
+
+async function buildMessageContent(message, imageService) {
+    const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+
+    if (!attachments.length) {
+        return message.content;
+    }
+
+    if (!imageService) {
+        throw new Error("Image service is required for multimodal messages");
+    }
+
+    const content = [];
+    const textContent = String(message.content || "").trim();
+
+    if (textContent) {
+        content.push({
+            type: "text",
+            text: textContent,
+        });
+    }
+
+    for (const attachment of attachments) {
+        content.push({
+            type: "image_url",
+            image_url: {
+                url: await imageService.buildDataUrl(attachment),
+            },
+        });
+    }
+
+    return content;
 }
 
 function buildTitleMessages(messages) {

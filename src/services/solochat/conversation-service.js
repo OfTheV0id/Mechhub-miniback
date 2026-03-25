@@ -1,5 +1,7 @@
+const { SQLITE_NOW_ISO_EXPRESSION } = require("../../lib/time");
+
 function createSoloChatConversationService(db) {
-    const nowExpression = `STRFTIME('%Y-%m-%d %H:%M:%f', 'now')`;
+    const nowExpression = SQLITE_NOW_ISO_EXPRESSION;
 
     async function listConversationsForUser(userId) {
         return db.all(
@@ -47,13 +49,15 @@ function createSoloChatConversationService(db) {
     }
 
     async function listMessages(conversationId) {
-        return db.all(
+        const messages = await db.all(
             `SELECT id, conversation_id, role, content, status, created_at, updated_at
              FROM solochat_messages
              WHERE conversation_id = ?
              ORDER BY id ASC`,
             conversationId,
         );
+
+        return attachImages(messages);
     }
 
     async function createMessage({
@@ -82,12 +86,19 @@ function createSoloChatConversationService(db) {
     }
 
     async function getMessageById(messageId) {
-        return db.get(
+        const message = await db.get(
             `SELECT id, conversation_id, role, content, status, created_at, updated_at
              FROM solochat_messages
              WHERE id = ?`,
             messageId,
         );
+
+        if (!message) {
+            return null;
+        }
+
+        const [hydratedMessage] = await attachImages([message]);
+        return hydratedMessage;
     }
 
     async function updateConversationTitle({ conversationId, title }) {
@@ -143,6 +154,34 @@ function createSoloChatConversationService(db) {
         );
 
         return result.changes;
+    }
+
+    async function attachImages(messages) {
+        if (!messages.length) {
+            return [];
+        }
+
+        const messageIds = messages.map((message) => message.id);
+        const placeholders = messageIds.map(() => "?").join(", ");
+        const images = await db.all(
+            `SELECT id, user_id, message_id, storage_path, mime_type, width, height, size_bytes, created_at
+             FROM solochat_images
+             WHERE message_id IN (${placeholders})
+             ORDER BY id ASC`,
+            ...messageIds,
+        );
+        const imagesByMessageId = new Map();
+
+        for (const image of images) {
+            const current = imagesByMessageId.get(image.message_id) || [];
+            current.push(image);
+            imagesByMessageId.set(image.message_id, current);
+        }
+
+        return messages.map((message) => ({
+            ...message,
+            attachments: imagesByMessageId.get(message.id) || [],
+        }));
     }
 
     return {

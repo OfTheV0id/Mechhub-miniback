@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const sqlite3 = require("sqlite3");
 const { open } = require("sqlite");
+const { SQLITE_NOW_ISO_EXPRESSION } = require("./time");
 
 let dbPromise;
 
@@ -32,7 +33,7 @@ async function initDb() {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION})
         );
     `);
 
@@ -76,8 +77,8 @@ async function ensureSoloChatTables(db) {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
             title TEXT NOT NULL DEFAULT 'New Chat',
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
+            updated_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
             FOREIGN KEY (user_id) REFERENCES users(id)
         );
     `);
@@ -89,9 +90,25 @@ async function ensureSoloChatTables(db) {
             role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
             content TEXT NOT NULL,
             status TEXT NOT NULL CHECK (status IN ('streaming', 'completed', 'failed')),
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (conversation_id) REFERENCES solochat_conversations(id) ON DELETE CASCADE
+            created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
+            updated_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
+             FOREIGN KEY (conversation_id) REFERENCES solochat_conversations(id) ON DELETE CASCADE
+        );
+    `);
+
+    await db.exec(`
+        CREATE TABLE IF NOT EXISTS solochat_images (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            message_id INTEGER DEFAULT NULL,
+            storage_path TEXT NOT NULL,
+            mime_type TEXT NOT NULL,
+            width INTEGER NOT NULL,
+            height INTEGER NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (message_id) REFERENCES solochat_messages(id) ON DELETE CASCADE
         );
     `);
 
@@ -104,6 +121,16 @@ async function ensureSoloChatTables(db) {
         CREATE INDEX IF NOT EXISTS idx_solochat_messages_conversation_id
         ON solochat_messages(conversation_id, id ASC)
     `);
+
+    await db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_solochat_images_user_created
+        ON solochat_images(user_id, created_at DESC, id DESC)
+    `);
+
+    await db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_solochat_images_message_id
+        ON solochat_images(message_id)
+    `);
 }
 
 async function ensureClassTables(db) {
@@ -115,7 +142,7 @@ async function ensureClassTables(db) {
             owner_user_id INTEGER NOT NULL,
             invite_code TEXT NOT NULL UNIQUE,
             status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
             FOREIGN KEY (owner_user_id) REFERENCES users(id)
         );
     `);
@@ -126,7 +153,7 @@ async function ensureClassTables(db) {
             class_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
             role TEXT NOT NULL CHECK (role IN ('teacher', 'student')),
-            joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            joined_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
             UNIQUE (class_id, user_id),
             FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE CASCADE,
             FOREIGN KEY (user_id) REFERENCES users(id)
