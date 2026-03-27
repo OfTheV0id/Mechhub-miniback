@@ -2,11 +2,14 @@ const { createOpenAiCompatibleClient } = require("./openai-client");
 
 function createSoloChatAiService(options = {}) {
     const client = options.client || createOpenAiCompatibleClient();
-    const imageService = options.imageService || null;
+    const attachmentService = options.attachmentService || null;
 
     async function streamAssistantTurn({ conversation, messages, onDelta }) {
         let assistantContent = "";
-        const replyMessages = await buildReplyMessages(messages, imageService);
+        const replyMessages = await buildReplyMessages(
+            messages,
+            attachmentService,
+        );
 
         for await (const delta of client.streamChatCompletion({
             messages: replyMessages,
@@ -46,7 +49,7 @@ function createSoloChatAiService(options = {}) {
     };
 }
 
-async function buildReplyMessages(messages, imageService) {
+async function buildReplyMessages(messages, attachmentService) {
     const replyMessages = [
         {
             role: "system",
@@ -58,22 +61,26 @@ async function buildReplyMessages(messages, imageService) {
     for (const message of messages) {
         replyMessages.push({
             role: message.role,
-            content: await buildMessageContent(message, imageService),
+            content: await buildMessageContent(message, attachmentService),
         });
     }
 
     return replyMessages;
 }
 
-async function buildMessageContent(message, imageService) {
-    const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+async function buildMessageContent(message, attachmentService) {
+    const attachments = Array.isArray(message.attachments)
+        ? message.attachments
+        : [];
 
     if (!attachments.length) {
         return message.content;
     }
 
-    if (!imageService) {
-        throw new Error("Image service is required for multimodal messages");
+    if (!attachmentService) {
+        throw new Error(
+            "Attachment service is required for multimodal messages",
+        );
     }
 
     const content = [];
@@ -87,10 +94,25 @@ async function buildMessageContent(message, imageService) {
     }
 
     for (const attachment of attachments) {
+        if (attachment.kind === "document") {
+            const documentText =
+                await attachmentService.readTextContent(attachment);
+
+            if (!documentText) {
+                continue;
+            }
+
+            content.push({
+                type: "text",
+                text: `Document: ${attachment.file_name}\n${documentText}`,
+            });
+            continue;
+        }
+
         content.push({
             type: "image_url",
             image_url: {
-                url: await imageService.buildDataUrl(attachment),
+                url: await attachmentService.buildDataUrl(attachment),
             },
         });
     }
@@ -123,11 +145,13 @@ function buildFallbackTitle(messages) {
 }
 
 function normalizeTitle(value) {
-    return String(value || "")
-        .replace(/^["'\s]+|["'\s]+$/g, "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 60) || "New Chat";
+    return (
+        String(value || "")
+            .replace(/^["'\s]+|["'\s]+$/g, "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 60) || "New Chat"
+    );
 }
 
 module.exports = {

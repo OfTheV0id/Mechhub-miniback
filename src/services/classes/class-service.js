@@ -3,7 +3,13 @@ const { SQLITE_NOW_ISO_EXPRESSION } = require("../../lib/time");
 function createClassService(db) {
     const nowExpression = SQLITE_NOW_ISO_EXPRESSION;
 
-    async function createClass({ ownerUserId, name, description, role, inviteCode }) {
+    async function createClass({
+        ownerUserId,
+        name,
+        description,
+        role,
+        inviteCode,
+    }) {
         const result = await db.run(
             `INSERT INTO classes (
                  name,
@@ -82,6 +88,15 @@ function createClassService(db) {
              FROM classes
              WHERE invite_code = ?`,
             inviteCode,
+        );
+    }
+
+    async function getClassById(classId) {
+        return db.get(
+            `SELECT id, name, description, owner_user_id, invite_code, status, created_at
+             FROM classes
+             WHERE id = ?`,
+            classId,
         );
     }
 
@@ -168,15 +183,84 @@ function createClassService(db) {
         );
     }
 
+    async function updateClass({ classId, name, description, status }) {
+        const updates = [];
+        const values = [];
+
+        if (name !== undefined) {
+            updates.push("name = ?");
+            values.push(name);
+        }
+
+        if (description !== undefined) {
+            updates.push("description = ?");
+            values.push(description);
+        }
+
+        if (status !== undefined) {
+            updates.push("status = ?");
+            values.push(status);
+        }
+
+        if (updates.length === 0) {
+            return getClassById(classId);
+        }
+
+        values.push(classId);
+        await db.run(
+            `UPDATE classes
+             SET ${updates.join(", ")}
+             WHERE id = ?`,
+            values,
+        );
+
+        return getClassById(classId);
+    }
+
+    async function rotateInviteCode({ classId, inviteCode }) {
+        await db.run(
+            `UPDATE classes
+             SET invite_code = ?
+             WHERE id = ?`,
+            inviteCode,
+            classId,
+        );
+
+        return getClassById(classId);
+    }
+
+    async function removeMember({ classId, memberId }) {
+        return db.run(
+            `DELETE FROM class_members
+             WHERE class_id = ? AND id = ?`,
+            classId,
+            memberId,
+        );
+    }
+
+    async function leaveClass({ classId, userId }) {
+        return db.run(
+            `DELETE FROM class_members
+             WHERE class_id = ? AND user_id = ?`,
+            classId,
+            userId,
+        );
+    }
+
     return {
         createClass,
+        getClassById,
         getClassByInviteCode,
         getClassForUser,
         getMemberById,
         getMembership,
         joinClass,
+        leaveClass,
         listClassesForUser,
         listMembers,
+        removeMember,
+        rotateInviteCode,
+        updateClass,
         updateMemberRole,
     };
 }

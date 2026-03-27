@@ -95,8 +95,42 @@ function parseClassDescription(value) {
     return description;
 }
 
+function parseOptionalClassName(value) {
+    if (value === undefined) {
+        return undefined;
+    }
+
+    return parseClassName(value);
+}
+
+function parseOptionalClassDescription(value) {
+    if (value === undefined) {
+        return undefined;
+    }
+
+    return parseClassDescription(value);
+}
+
+function parseClassStatus(value) {
+    if (value !== "active" && value !== "archived") {
+        throw badRequest("status must be either active or archived");
+    }
+
+    return value;
+}
+
+function parseOptionalClassStatus(value) {
+    if (value === undefined) {
+        return undefined;
+    }
+
+    return parseClassStatus(value);
+}
+
 function parseInviteCode(value) {
-    const inviteCode = String(value || "").trim().toUpperCase();
+    const inviteCode = String(value || "")
+        .trim()
+        .toUpperCase();
 
     if (!inviteCode) {
         throw badRequest("inviteCode is required");
@@ -157,7 +191,9 @@ function createClassesRouter(db) {
 
             return res.json(
                 classes.map((classRecord) =>
-                    sanitizeClassRecord(attachCurrentUserId(classRecord, userId)),
+                    sanitizeClassRecord(
+                        attachCurrentUserId(classRecord, userId),
+                    ),
                 ),
             );
         } catch (error) {
@@ -189,7 +225,11 @@ function createClassesRouter(db) {
 
             return res
                 .status(201)
-                .json(sanitizeClassRecord(attachCurrentUserId(classRecord, userId)));
+                .json(
+                    sanitizeClassRecord(
+                        attachCurrentUserId(classRecord, userId),
+                    ),
+                );
         } catch (error) {
             return next(error);
         }
@@ -235,7 +275,11 @@ function createClassesRouter(db) {
 
             return res
                 .status(201)
-                .json(sanitizeClassRecord(attachCurrentUserId(joinedClass, userId)));
+                .json(
+                    sanitizeClassRecord(
+                        attachCurrentUserId(joinedClass, userId),
+                    ),
+                );
         } catch (error) {
             return next(error);
         }
@@ -257,6 +301,118 @@ function createClassesRouter(db) {
             return res.json(
                 sanitizeClassRecord(attachCurrentUserId(classRecord, userId)),
             );
+        } catch (error) {
+            return next(error);
+        }
+    });
+
+    router.patch("/:classId", async (req, res, next) => {
+        try {
+            const userId = requireUserId(req);
+            const classId = parseClassId(req.params.classId);
+            const classRecord = await classService.getClassForUser({
+                classId,
+                userId,
+            });
+
+            if (!classRecord) {
+                throw notFound("Class not found");
+            }
+
+            if (classRecord.owner_user_id !== userId) {
+                throw forbidden("Only the class owner can update the class");
+            }
+
+            const name = parseOptionalClassName(req.body?.name);
+            const description = parseOptionalClassDescription(
+                req.body?.description,
+            );
+            const status = parseOptionalClassStatus(req.body?.status);
+
+            if (
+                name === undefined &&
+                description === undefined &&
+                status === undefined
+            ) {
+                throw badRequest("At least one class field is required");
+            }
+
+            await classService.updateClass({
+                classId,
+                name,
+                description,
+                status,
+            });
+
+            const updatedClass = await classService.getClassForUser({
+                classId,
+                userId,
+            });
+            return res.json(
+                sanitizeClassRecord(attachCurrentUserId(updatedClass, userId)),
+            );
+        } catch (error) {
+            return next(error);
+        }
+    });
+
+    router.post("/:classId/invite-code/rotate", async (req, res, next) => {
+        try {
+            const userId = requireUserId(req);
+            const classId = parseClassId(req.params.classId);
+            const classRecord = await classService.getClassForUser({
+                classId,
+                userId,
+            });
+
+            if (!classRecord) {
+                throw notFound("Class not found");
+            }
+
+            if (classRecord.owner_user_id !== userId) {
+                throw forbidden(
+                    "Only the class owner can rotate the invite code",
+                );
+            }
+
+            await classService.rotateInviteCode({
+                classId,
+                inviteCode: createInviteCode(),
+            });
+
+            const updatedClass = await classService.getClassForUser({
+                classId,
+                userId,
+            });
+            return res.json(
+                sanitizeClassRecord(attachCurrentUserId(updatedClass, userId)),
+            );
+        } catch (error) {
+            return next(error);
+        }
+    });
+
+    router.post("/:classId/leave", async (req, res, next) => {
+        try {
+            const userId = requireUserId(req);
+            const classId = parseClassId(req.params.classId);
+            const classRecord = await classService.getClassForUser({
+                classId,
+                userId,
+            });
+
+            if (!classRecord) {
+                throw notFound("Class not found");
+            }
+
+            if (classRecord.owner_user_id === userId) {
+                throw badRequest(
+                    "The class owner cannot leave the class directly",
+                );
+            }
+
+            await classService.leaveClass({ classId, userId });
+            return res.status(204).end();
         } catch (error) {
             return next(error);
         }
@@ -328,6 +484,44 @@ function createClassesRouter(db) {
             return res.json(
                 sanitizeMembership(updatedMember, classRecord.owner_user_id),
             );
+        } catch (error) {
+            return next(error);
+        }
+    });
+
+    router.delete("/:classId/members/:memberId", async (req, res, next) => {
+        try {
+            const userId = requireUserId(req);
+            const classId = parseClassId(req.params.classId);
+            const memberId = parseMemberId(req.params.memberId);
+            const classRecord = await classService.getClassForUser({
+                classId,
+                userId,
+            });
+
+            if (!classRecord) {
+                throw notFound("Class not found");
+            }
+
+            if (classRecord.owner_user_id !== userId) {
+                throw forbidden("Only the class owner can remove members");
+            }
+
+            const member = await classService.getMemberById({
+                classId,
+                memberId,
+            });
+
+            if (!member) {
+                throw notFound("Member not found");
+            }
+
+            if (member.user_id === classRecord.owner_user_id) {
+                throw badRequest("The class owner cannot be removed");
+            }
+
+            await classService.removeMember({ classId, memberId });
+            return res.status(204).end();
         } catch (error) {
             return next(error);
         }

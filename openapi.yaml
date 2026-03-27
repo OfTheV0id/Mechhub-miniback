@@ -1,1177 +1,2737 @@
 openapi: 3.0.3
 info:
-  title: MechHub Miniback API
-  version: 1.0.0
-  description: Standalone backend for MechHub. Authentication is session-based and uses the `mechhub.sid` cookie.
+    title: MechHub Miniback API
+    version: 1.0.0
+    description: Standalone backend for MechHub. Authentication is session-based and uses the `mechhub.sid` cookie.
 
 servers:
-  - url: http://localhost:3001
-    description: Local development server
+    - url: http://localhost:3001
+      description: Local development server
 
 tags:
-  - name: Health
-    description: Service health endpoints
-  - name: Auth
-    description: Authentication and current-user endpoints
-  - name: Users
-    description: Current-user profile endpoints
-  - name: Classes
-    description: Class creation, membership, and role management endpoints
-  - name: SoloChat
-    description: SoloChat conversation, message history, and streaming AI reply endpoints
+    - name: Health
+      description: Service health endpoints
+    - name: Auth
+      description: Authentication and current-user endpoints
+    - name: Users
+      description: Current-user profile endpoints
+    - name: Classes
+      description: Class creation, membership, and role management endpoints
+    - name: Assignments
+      description: Assignment publishing, submission, and review endpoints
+    - name: Dashboards
+      description: Aggregated teacher, class, and student dashboard endpoints
+    - name: Uploads
+      description: Shared file upload endpoints for assignments and submissions
+    - name: SoloChat
+      description: SoloChat conversation, message history, and streaming AI reply endpoints
 
 components:
-  securitySchemes:
-    cookieAuth:
-      type: apiKey
-      in: cookie
-      name: mechhub.sid
+    securitySchemes:
+        cookieAuth:
+            type: apiKey
+            in: cookie
+            name: mechhub.sid
 
-  schemas:
-    User:
-      type: object
-      required:
-        - id
-        - email
-        - displayName
-        - avatarUrl
-        - bio
-        - defaultRole
-        - createdAt
-      properties:
-        id:
-          type: integer
-          example: 1
-        email:
-          type: string
-          format: email
-          example: test@example.com
-        displayName:
-          type: string
-          example: MechFox4821
-        avatarUrl:
-          type: string
-          example: https://api.dicebear.com/9.x/pixel-art/svg?seed=MechFox4821
-        bio:
-          type: string
-          example: Building the next mechanics education workflow.
-        defaultRole:
-          type: string
-          enum: [teacher, student]
-          example: student
-        createdAt:
-          type: string
-          format: date-time
-          example: 2026-03-23T09:00:00.100Z
+    schemas:
+        User:
+            type: object
+            required:
+                - id
+                - email
+                - displayName
+                - avatarUrl
+                - bio
+                - defaultRole
+                - createdAt
+            properties:
+                id:
+                    type: integer
+                    example: 1
+                email:
+                    type: string
+                    format: email
+                    example: test@example.com
+                displayName:
+                    type: string
+                    example: MechFox4821
+                avatarUrl:
+                    type: string
+                    example: https://api.dicebear.com/9.x/pixel-art/svg?seed=MechFox4821
+                bio:
+                    type: string
+                    example: Building the next mechanics education workflow.
+                defaultRole:
+                    type: string
+                    enum: [teacher, student]
+                    example: student
+                createdAt:
+                    type: string
+                    format: date-time
+                    example: 2026-03-23T09:00:00.100Z
 
-    UpdateMeRequest:
-      type: object
-      properties:
-        displayName:
-          type: string
-          maxLength: 100
-          example: StaticNova3141
-        avatarUrl:
-          type: string
-          maxLength: 2048
-          example: https://api.dicebear.com/9.x/pixel-art/svg?seed=StaticNova3141
-        bio:
-          type: string
-          maxLength: 500
-          example: Studying statics and mechanics every day.
+        UpdateMeRequest:
+            type: object
+            properties:
+                displayName:
+                    type: string
+                    maxLength: 100
+                    example: StaticNova3141
+                avatarUrl:
+                    type: string
+                    maxLength: 2048
+                    example: https://api.dicebear.com/9.x/pixel-art/svg?seed=StaticNova3141
+                bio:
+                    type: string
+                    maxLength: 500
+                    example: Studying statics and mechanics every day.
 
-    RegisterRequest:
-      type: object
-      required:
-        - email
-        - password
-        - defaultRole
-      properties:
-        email:
-          type: string
-          format: email
-          example: test@example.com
-        password:
-          type: string
-          minLength: 8
-          example: password123
-        defaultRole:
-          type: string
-          enum: [teacher, student]
-          example: student
+        RegisterRequest:
+            type: object
+            required:
+                - email
+                - password
+                - defaultRole
+            properties:
+                email:
+                    type: string
+                    format: email
+                    example: test@example.com
+                password:
+                    type: string
+                    minLength: 8
+                    example: password123
+                defaultRole:
+                    type: string
+                    enum: [teacher, student]
+                    example: student
 
-    LoginRequest:
-      type: object
-      required:
-        - email
-        - password
-      properties:
-        email:
-          type: string
-          format: email
-          example: test@example.com
-        password:
-          type: string
-          example: password123
+        LoginRequest:
+            type: object
+            required:
+                - email
+                - password
+            properties:
+                email:
+                    type: string
+                    format: email
+                    example: test@example.com
+                password:
+                    type: string
+                    example: password123
 
-    LogoutResponse:
-      type: object
-      required:
-        - message
-      properties:
-        message:
-          type: string
-          example: Logged out
+        LogoutResponse:
+            type: object
+            required:
+                - message
+            properties:
+                message:
+                    type: string
+                    example: Logged out
 
-    HealthResponse:
-      type: object
-      required:
-        - status
-      properties:
-        status:
-          type: string
-          example: ok
+        HealthResponse:
+            type: object
+            required:
+                - status
+            properties:
+                status:
+                    type: string
+                    example: ok
 
-    ErrorResponse:
-      type: object
-      required:
-        - message
-      properties:
-        message:
-          type: string
-          example: Not authenticated
+        ErrorResponse:
+            type: object
+            required:
+                - message
+            properties:
+                message:
+                    type: string
+                    example: Not authenticated
 
-    Class:
-      type: object
-      required:
-        - id
-        - name
-        - description
-        - ownerUserId
-        - inviteCode
-        - status
-        - createdAt
-        - membershipRole
-        - isOwner
-      properties:
-        id:
-          type: integer
-          example: 1
-        name:
-          type: string
-          example: Statics 101
-        description:
-          type: string
-          example: Introductory statics class for spring term.
-        ownerUserId:
-          type: integer
-          example: 1
-        inviteCode:
-          type: string
-          example: 8F1A2C4D
-        status:
-          type: string
-          enum: [active, archived]
-          example: active
-        createdAt:
-          type: string
-          format: date-time
-          example: 2026-03-23T09:10:00.200Z
-        membershipRole:
-          type: string
-          enum: [teacher, student]
-          nullable: true
-          example: teacher
-        isOwner:
-          type: boolean
-          example: true
+        Class:
+            type: object
+            required:
+                - id
+                - name
+                - description
+                - ownerUserId
+                - inviteCode
+                - status
+                - createdAt
+                - membershipRole
+                - isOwner
+            properties:
+                id:
+                    type: integer
+                    example: 1
+                name:
+                    type: string
+                    example: Statics 101
+                description:
+                    type: string
+                    example: Introductory statics class for spring term.
+                ownerUserId:
+                    type: integer
+                    example: 1
+                inviteCode:
+                    type: string
+                    example: 8F1A2C4D
+                status:
+                    type: string
+                    enum: [active, archived]
+                    example: active
+                createdAt:
+                    type: string
+                    format: date-time
+                    example: 2026-03-23T09:10:00.200Z
+                membershipRole:
+                    type: string
+                    enum: [teacher, student]
+                    nullable: true
+                    example: teacher
+                isOwner:
+                    type: boolean
+                    example: true
 
-    CreateClassRequest:
-      type: object
-      required:
-        - name
-      properties:
-        name:
-          type: string
-          maxLength: 120
-          example: Statics 101
-        description:
-          type: string
-          maxLength: 1000
-          example: Introductory statics class for spring term.
+        CreateClassRequest:
+            type: object
+            required:
+                - name
+            properties:
+                name:
+                    type: string
+                    maxLength: 120
+                    example: Statics 101
+                description:
+                    type: string
+                    maxLength: 1000
+                    example: Introductory statics class for spring term.
 
-    JoinClassRequest:
-      type: object
-      required:
-        - inviteCode
-      properties:
-        inviteCode:
-          type: string
-          example: 8F1A2C4D
+        JoinClassRequest:
+            type: object
+            required:
+                - inviteCode
+            properties:
+                inviteCode:
+                    type: string
+                    example: 8F1A2C4D
 
-    UpdateClassMemberRoleRequest:
-      type: object
-      required:
-        - role
-      properties:
-        role:
-          type: string
-          enum: [teacher, student]
-          example: teacher
+        UpdateClassMemberRoleRequest:
+            type: object
+            required:
+                - role
+            properties:
+                role:
+                    type: string
+                    enum: [teacher, student]
+                    example: teacher
 
-    ClassMember:
-      type: object
-      required:
-        - id
-        - classId
-        - userId
-        - role
-        - joinedAt
-        - isOwner
-        - user
-      properties:
-        id:
-          type: integer
-          example: 1
-        classId:
-          type: integer
-          example: 1
-        userId:
-          type: integer
-          example: 1
-        role:
-          type: string
-          enum: [teacher, student]
-          example: teacher
-        joinedAt:
-          type: string
-          format: date-time
-          example: 2026-03-23T09:10:00.250Z
-        isOwner:
-          type: boolean
-          example: true
-        user:
-          $ref: "#/components/schemas/User"
+        ClassMember:
+            type: object
+            required:
+                - id
+                - classId
+                - userId
+                - role
+                - joinedAt
+                - isOwner
+                - user
+            properties:
+                id:
+                    type: integer
+                    example: 1
+                classId:
+                    type: integer
+                    example: 1
+                userId:
+                    type: integer
+                    example: 1
+                role:
+                    type: string
+                    enum: [teacher, student]
+                    example: teacher
+                joinedAt:
+                    type: string
+                    format: date-time
+                    example: 2026-03-23T09:10:00.250Z
+                isOwner:
+                    type: boolean
+                    example: true
+                user:
+                    $ref: "#/components/schemas/User"
 
-    SoloChatConversation:
-      type: object
-      required:
-        - id
-        - title
-        - updatedAt
-      properties:
-        id:
-          type: integer
-          example: 1
-        title:
-          type: string
-          example: Force Balance Basics
-        updatedAt:
-          type: string
-          format: date-time
-          example: 2026-03-23T09:30:00.123Z
+        UpdateClassRequest:
+            type: object
+            properties:
+                name:
+                    type: string
+                    maxLength: 120
+                    example: Statics 101 - Section A
+                description:
+                    type: string
+                    maxLength: 1000
+                    example: Updated spring term statics section.
+                status:
+                    type: string
+                    enum: [active, archived]
+                    example: active
 
-    RenameSoloChatConversationRequest:
-      type: object
-      required:
-        - title
-      properties:
-        title:
-          type: string
-          maxLength: 120
-          example: Statics Week 3 Review
+        FileAsset:
+            type: object
+            required:
+                - id
+                - fileName
+                - url
+                - mimeType
+                - sizeBytes
+                - purpose
+                - createdAt
+            properties:
+                id:
+                    type: integer
+                    example: 21
+                fileName:
+                    type: string
+                    example: assignment-week-3.pdf
+                url:
+                    type: string
+                    example: /uploads/files/21
+                mimeType:
+                    type: string
+                    example: application/pdf
+                sizeBytes:
+                    type: integer
+                    example: 184291
+                width:
+                    type: integer
+                    nullable: true
+                    example: 1536
+                height:
+                    type: integer
+                    nullable: true
+                    example: 1024
+                kind:
+                    type: string
+                    enum: [image, document, file]
+                    example: image
+                purpose:
+                    type: string
+                    enum:
+                        [assignment_attachment, submission_attachment, solochat]
+                    example: assignment_attachment
+                createdAt:
+                    type: string
+                    format: date-time
+                    example: 2026-03-25T09:31:00.456Z
 
-    SoloChatMessage:
-      type: object
-      required:
-        - id
-        - conversationId
-        - role
-        - content
-        - status
-        - attachments
-        - createdAt
-        - updatedAt
-      properties:
-        id:
-          type: integer
-          example: 12
-        conversationId:
-          type: integer
-          example: 1
-        role:
-          type: string
-          enum: [user, assistant]
-          example: assistant
-        content:
-          type: string
-          example: Start by drawing the free-body diagram.
-        status:
-          type: string
-          enum: [streaming, completed, failed]
-          example: completed
-        attachments:
-          type: array
-          items:
-            $ref: "#/components/schemas/SoloChatImageAttachment"
-        createdAt:
-          type: string
-          format: date-time
-          example: 2026-03-23T09:31:00.456Z
-        updatedAt:
-          type: string
-          format: date-time
-          example: 2026-03-23T09:31:02.012Z
+        Assignment:
+            type: object
+            required:
+                - id
+                - classId
+                - className
+                - title
+                - description
+                - attachments
+                - startAt
+                - dueAt
+                - allowLateSubmission
+                - maxScore
+                - status
+                - createdByUserId
+                - publishedAt
+                - closedAt
+                - createdAt
+                - updatedAt
+            properties:
+                id:
+                    type: integer
+                    example: 9
+                classId:
+                    type: integer
+                    example: 1
+                className:
+                    type: string
+                    example: Statics 101
+                title:
+                    type: string
+                    example: Week 3 Force Balance Homework
+                description:
+                    type: string
+                    example: Solve problems 1-5 and explain your free-body diagrams.
+                attachments:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/FileAsset"
+                startAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    example: 2026-03-25T08:00:00.000Z
+                dueAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    example: 2026-03-30T15:59:59.000Z
+                allowLateSubmission:
+                    type: boolean
+                    example: false
+                maxScore:
+                    type: number
+                    format: float
+                    example: 100
+                status:
+                    type: string
+                    enum: [draft, published, closed, archived]
+                    example: published
+                createdByUserId:
+                    type: integer
+                    example: 1
+                publishedAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    example: 2026-03-25T08:10:00.000Z
+                closedAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    example: null
+                createdAt:
+                    type: string
+                    format: date-time
+                    example: 2026-03-25T08:00:00.000Z
+                updatedAt:
+                    type: string
+                    format: date-time
+                    example: 2026-03-25T08:10:00.000Z
 
-    CreateSoloChatMessageRequest:
-      type: object
-      properties:
-        content:
-          type: string
-          example: Explain free-body diagrams.
-        imageId:
-          type: integer
-          example: 7
+        CreateAssignmentRequest:
+            type: object
+            required:
+                - title
+                - description
+            properties:
+                title:
+                    type: string
+                    maxLength: 200
+                    example: Week 3 Force Balance Homework
+                description:
+                    type: string
+                    maxLength: 10000
+                    example: Solve problems 1-5 and explain your free-body diagrams.
+                attachmentIds:
+                    type: array
+                    items:
+                        type: integer
+                    example: [21, 22]
+                startAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    example: 2026-03-25T08:00:00.000Z
+                dueAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    example: 2026-03-30T15:59:59.000Z
+                allowLateSubmission:
+                    type: boolean
+                    example: false
+                maxScore:
+                    type: number
+                    format: float
+                    example: 100
+                status:
+                    type: string
+                    enum: [draft, published]
+                    example: published
 
-    SoloChatImageAttachment:
-      type: object
-      required:
-        - id
-        - kind
-        - url
-        - mimeType
-        - width
-        - height
-        - sizeBytes
-        - createdAt
-      properties:
-        id:
-          type: integer
-          example: 7
-        kind:
-          type: string
-          enum: [image]
-          example: image
-        url:
-          type: string
-          example: /solochat/images/7
-        mimeType:
-          type: string
-          example: image/webp
-        width:
-          type: integer
-          example: 1536
-        height:
-          type: integer
-          example: 1024
-        sizeBytes:
-          type: integer
-          example: 482913
-        createdAt:
-          type: string
-          format: date-time
-          example: 2026-03-25T09:31:00.456Z
+        UpdateAssignmentRequest:
+            type: object
+            properties:
+                title:
+                    type: string
+                    maxLength: 200
+                    example: Week 3 Force Balance Homework - Revised
+                description:
+                    type: string
+                    maxLength: 10000
+                    example: Solve problems 1-6 and explain your free-body diagrams clearly.
+                attachmentIds:
+                    type: array
+                    items:
+                        type: integer
+                    example: [21, 22, 25]
+                startAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    example: 2026-03-25T08:00:00.000Z
+                dueAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    example: 2026-04-01T15:59:59.000Z
+                allowLateSubmission:
+                    type: boolean
+                    example: true
+                maxScore:
+                    type: number
+                    format: float
+                    example: 120
 
-    SoloChatUploadedImage:
-      type: object
-      required:
-        - id
-        - url
-        - mimeType
-        - width
-        - height
-        - sizeBytes
-        - createdAt
-      properties:
-        id:
-          type: integer
-          example: 7
-        url:
-          type: string
-          example: /solochat/images/7
-        mimeType:
-          type: string
-          example: image/webp
-        width:
-          type: integer
-          example: 1536
-        height:
-          type: integer
-          example: 1024
-        sizeBytes:
-          type: integer
-          example: 482913
-        createdAt:
-          type: string
-          format: date-time
-          example: 2026-03-25T09:31:00.456Z
+        AssignmentReview:
+            type: object
+            required:
+                - score
+                - comment
+                - reviewedAt
+                - reviewerUserId
+                - reviewer
+            properties:
+                score:
+                    type: number
+                    format: float
+                    example: 92
+                comment:
+                    type: string
+                    example: Force decomposition is correct. Add more explanation for question 4.
+                reviewedAt:
+                    type: string
+                    format: date-time
+                    example: 2026-03-30T08:30:00.000Z
+                reviewerUserId:
+                    type: integer
+                    example: 1
+                reviewer:
+                    $ref: "#/components/schemas/User"
+
+        ReviewAssignmentSubmissionRequest:
+            type: object
+            required:
+                - score
+            properties:
+                score:
+                    type: number
+                    format: float
+                    example: 92
+                comment:
+                    type: string
+                    example: Force decomposition is correct. Add more explanation for question 4.
+
+        AssignmentSubmission:
+            type: object
+            required:
+                - id
+                - assignmentId
+                - studentId
+                - student
+                - submissionStatus
+                - textAnswer
+                - attachments
+                - submittedAt
+                - updatedAt
+                - isLate
+                - review
+            properties:
+                id:
+                    type: integer
+                    nullable: true
+                    example: 44
+                assignmentId:
+                    type: integer
+                    example: 9
+                studentId:
+                    type: integer
+                    example: 3
+                student:
+                    $ref: "#/components/schemas/User"
+                submissionStatus:
+                    type: string
+                    enum:
+                        [
+                            not_started,
+                            draft,
+                            submitted,
+                            late_submitted,
+                            reviewed,
+                        ]
+                    example: submitted
+                textAnswer:
+                    type: string
+                    example: I first drew the free-body diagram for each body and listed the equilibrium equations.
+                attachments:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/FileAsset"
+                submittedAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    example: 2026-03-29T14:00:00.000Z
+                updatedAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    example: 2026-03-29T14:00:00.000Z
+                isLate:
+                    type: boolean
+                    example: false
+                review:
+                    allOf:
+                        - $ref: "#/components/schemas/AssignmentReview"
+                    nullable: true
+
+        UpsertMyAssignmentSubmissionRequest:
+            type: object
+            required:
+                - status
+            properties:
+                textAnswer:
+                    type: string
+                    example: My written solution is below.
+                attachmentIds:
+                    type: array
+                    items:
+                        type: integer
+                    example: [31]
+                status:
+                    type: string
+                    enum: [draft, submitted]
+                    example: submitted
+
+        TeacherClassDashboardItem:
+            type: object
+            required:
+                - class
+                - studentCount
+                - assignmentCount
+                - pendingReviewCount
+                - upcomingDueCount
+            properties:
+                class:
+                    $ref: "#/components/schemas/Class"
+                studentCount:
+                    type: integer
+                    example: 32
+                assignmentCount:
+                    type: integer
+                    example: 8
+                pendingReviewCount:
+                    type: integer
+                    example: 14
+                upcomingDueCount:
+                    type: integer
+                    example: 2
+
+        TeacherClassesDashboard:
+            type: object
+            required:
+                - summary
+                - classes
+            properties:
+                summary:
+                    type: object
+                    required:
+                        - classCount
+                        - studentCount
+                        - assignmentCount
+                        - pendingReviewCount
+                    properties:
+                        classCount:
+                            type: integer
+                            example: 3
+                        studentCount:
+                            type: integer
+                            example: 96
+                        assignmentCount:
+                            type: integer
+                            example: 24
+                        pendingReviewCount:
+                            type: integer
+                            example: 31
+                classes:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/TeacherClassDashboardItem"
+
+        TeacherAssignmentDashboardItem:
+            type: object
+            required:
+                - assignmentId
+                - classId
+                - className
+                - title
+                - status
+                - dueAt
+                - totalStudents
+                - submittedCount
+                - reviewedCount
+                - pendingReviewCount
+            properties:
+                assignmentId:
+                    type: integer
+                    example: 9
+                classId:
+                    type: integer
+                    example: 1
+                className:
+                    type: string
+                    example: Statics 101
+                title:
+                    type: string
+                    example: Week 3 Force Balance Homework
+                status:
+                    type: string
+                    enum: [draft, published, closed, archived]
+                    example: published
+                dueAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    example: 2026-03-30T15:59:59.000Z
+                totalStudents:
+                    type: integer
+                    example: 32
+                submittedCount:
+                    type: integer
+                    example: 28
+                reviewedCount:
+                    type: integer
+                    example: 17
+                pendingReviewCount:
+                    type: integer
+                    example: 11
+
+        TeacherAssignmentsDashboard:
+            type: object
+            required:
+                - summary
+                - assignments
+            properties:
+                summary:
+                    type: object
+                    required:
+                        - assignmentCount
+                        - publishedCount
+                        - pendingReviewCount
+                        - overdueCount
+                    properties:
+                        assignmentCount:
+                            type: integer
+                            example: 24
+                        publishedCount:
+                            type: integer
+                            example: 18
+                        pendingReviewCount:
+                            type: integer
+                            example: 31
+                        overdueCount:
+                            type: integer
+                            example: 4
+                assignments:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/TeacherAssignmentDashboardItem"
+
+        ClassDashboard:
+            type: object
+            required:
+                - class
+                - summary
+                - members
+                - assignments
+            properties:
+                class:
+                    $ref: "#/components/schemas/Class"
+                summary:
+                    type: object
+                    required:
+                        - studentCount
+                        - assignmentCount
+                        - pendingReviewCount
+                    properties:
+                        studentCount:
+                            type: integer
+                            example: 32
+                        assignmentCount:
+                            type: integer
+                            example: 8
+                        pendingReviewCount:
+                            type: integer
+                            example: 14
+                members:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/ClassMember"
+                assignments:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/TeacherAssignmentDashboardItem"
+
+        AssignmentClassDashboard:
+            type: object
+            required:
+                - assignment
+                - summary
+                - submissions
+            properties:
+                assignment:
+                    $ref: "#/components/schemas/Assignment"
+                summary:
+                    type: object
+                    required:
+                        - studentCount
+                        - submittedCount
+                        - reviewedCount
+                        - pendingReviewCount
+                        - lateCount
+                    properties:
+                        studentCount:
+                            type: integer
+                            example: 32
+                        submittedCount:
+                            type: integer
+                            example: 28
+                        reviewedCount:
+                            type: integer
+                            example: 17
+                        pendingReviewCount:
+                            type: integer
+                            example: 11
+                        lateCount:
+                            type: integer
+                            example: 3
+                submissions:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/AssignmentSubmission"
+
+        StudentAssignmentCard:
+            type: object
+            required:
+                - assignmentId
+                - classId
+                - className
+                - title
+                - dueAt
+                - assignmentStatus
+                - submissionStatus
+                - submittedAt
+                - isLate
+                - score
+            properties:
+                assignmentId:
+                    type: integer
+                    example: 9
+                classId:
+                    type: integer
+                    example: 1
+                className:
+                    type: string
+                    example: Statics 101
+                title:
+                    type: string
+                    example: Week 3 Force Balance Homework
+                dueAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    example: 2026-03-30T15:59:59.000Z
+                assignmentStatus:
+                    type: string
+                    enum: [draft, published, closed, archived]
+                    example: published
+                submissionStatus:
+                    type: string
+                    enum:
+                        [
+                            not_started,
+                            draft,
+                            submitted,
+                            late_submitted,
+                            reviewed,
+                        ]
+                    example: submitted
+                submittedAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    example: 2026-03-29T14:00:00.000Z
+                isLate:
+                    type: boolean
+                    example: false
+                score:
+                    type: number
+                    format: float
+                    nullable: true
+                    example: 92
+
+        StudentAssignmentsDashboard:
+            type: object
+            required:
+                - summary
+                - assignments
+            properties:
+                summary:
+                    type: object
+                    required:
+                        - pendingCount
+                        - dueSoonCount
+                        - submittedCount
+                        - reviewedCount
+                    properties:
+                        pendingCount:
+                            type: integer
+                            example: 3
+                        dueSoonCount:
+                            type: integer
+                            example: 1
+                        submittedCount:
+                            type: integer
+                            example: 6
+                        reviewedCount:
+                            type: integer
+                            example: 4
+                assignments:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/StudentAssignmentCard"
+
+        SoloChatConversation:
+            type: object
+            required:
+                - id
+                - title
+                - updatedAt
+            properties:
+                id:
+                    type: integer
+                    example: 1
+                title:
+                    type: string
+                    example: Force Balance Basics
+                updatedAt:
+                    type: string
+                    format: date-time
+                    example: 2026-03-23T09:30:00.123Z
+
+        RenameSoloChatConversationRequest:
+            type: object
+            required:
+                - title
+            properties:
+                title:
+                    type: string
+                    maxLength: 120
+                    example: Statics Week 3 Review
+
+        SoloChatMessage:
+            type: object
+            required:
+                - id
+                - conversationId
+                - role
+                - content
+                - status
+                - attachments
+                - createdAt
+                - updatedAt
+            properties:
+                id:
+                    type: integer
+                    example: 12
+                conversationId:
+                    type: integer
+                    example: 1
+                role:
+                    type: string
+                    enum: [user, assistant]
+                    example: assistant
+                content:
+                    type: string
+                    example: Start by drawing the free-body diagram.
+                status:
+                    type: string
+                    enum: [streaming, completed, failed]
+                    example: completed
+                attachments:
+                    type: array
+                    items:
+                        $ref: "#/components/schemas/SoloChatImageAttachment"
+                createdAt:
+                    type: string
+                    format: date-time
+                    example: 2026-03-23T09:31:00.456Z
+                updatedAt:
+                    type: string
+                    format: date-time
+                    example: 2026-03-23T09:31:02.012Z
+
+        CreateSoloChatMessageRequest:
+            type: object
+            properties:
+                content:
+                    type: string
+                    example: Explain free-body diagrams.
+                attachmentIds:
+                    type: array
+                    items:
+                        type: integer
+                    example: [7, 8, 9]
+
+        SoloChatImageAttachment:
+            type: object
+            required:
+                - id
+                - kind
+                - purpose
+                - fileName
+                - url
+                - mimeType
+                - width
+                - height
+                - sizeBytes
+                - createdAt
+            properties:
+                id:
+                    type: integer
+                    example: 7
+                kind:
+                    type: string
+                    enum: [image, document]
+                    example: image
+                purpose:
+                    type: string
+                    enum: [solochat]
+                    example: solochat
+                fileName:
+                    type: string
+                    example: beam-notes.md
+                url:
+                    type: string
+                    example: /uploads/files/7
+                mimeType:
+                    type: string
+                    example: image/webp
+                width:
+                    type: integer
+                    nullable: true
+                    example: 1536
+                height:
+                    type: integer
+                    nullable: true
+                    example: 1024
+                sizeBytes:
+                    type: integer
+                    example: 482913
+                createdAt:
+                    type: string
+                    format: date-time
+                    example: 2026-03-25T09:31:00.456Z
 
 paths:
-  /health:
-    get:
-      tags:
-        - Health
-      summary: Check service health
-      operationId: getHealth
-      responses:
-        "200":
-          description: Service is running
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/HealthResponse"
+    /health:
+        get:
+            tags:
+                - Health
+            summary: Check service health
+            operationId: getHealth
+            responses:
+                "200":
+                    description: Service is running
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/HealthResponse"
 
-  /auth/register:
-    post:
-      tags:
-        - Auth
-      summary: Register a new user
-      operationId: registerUser
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RegisterRequest"
-      responses:
-        "201":
-          description: User created and logged in with a generated display name and avatar
-          headers:
-            Set-Cookie:
-              description: Session cookie for the authenticated user
-              schema:
-                type: string
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/User"
-        "400":
-          description: Invalid email, password, or default role
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "409":
-          description: Email already exists
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+    /auth/register:
+        post:
+            tags:
+                - Auth
+            summary: Register a new user
+            operationId: registerUser
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/RegisterRequest"
+            responses:
+                "201":
+                    description: User created and logged in with a generated display name and avatar
+                    headers:
+                        Set-Cookie:
+                            description: Session cookie for the authenticated user
+                            schema:
+                                type: string
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/User"
+                "400":
+                    description: Invalid email, password, or default role
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "409":
+                    description: Email already exists
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
 
-  /auth/login:
-    post:
-      tags:
-        - Auth
-      summary: Log in with email and password
-      operationId: loginUser
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/LoginRequest"
-      responses:
-        "200":
-          description: Login successful
-          headers:
-            Set-Cookie:
-              description: Session cookie for the authenticated user
-              schema:
-                type: string
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/User"
-        "400":
-          description: Missing or invalid fields
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "401":
-          description: Invalid email or password
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+    /auth/login:
+        post:
+            tags:
+                - Auth
+            summary: Log in with email and password
+            operationId: loginUser
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/LoginRequest"
+            responses:
+                "200":
+                    description: Login successful
+                    headers:
+                        Set-Cookie:
+                            description: Session cookie for the authenticated user
+                            schema:
+                                type: string
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/User"
+                "400":
+                    description: Missing or invalid fields
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Invalid email or password
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
 
-  /auth/me:
-    get:
-      tags:
-        - Auth
-      summary: Get the current authenticated user
-      operationId: getCurrentUser
-      security:
-        - cookieAuth: []
-      responses:
-        "200":
-          description: Current user
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/User"
-        "401":
-          description: Not authenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+    /auth/me:
+        get:
+            tags:
+                - Auth
+            summary: Get the current authenticated user
+            operationId: getCurrentUser
+            security:
+                - cookieAuth: []
+            responses:
+                "200":
+                    description: Current user
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/User"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
 
-  /auth/logout:
-    post:
-      tags:
-        - Auth
-      summary: Log out the current user
-      operationId: logoutUser
-      security:
-        - cookieAuth: []
-      responses:
-        "200":
-          description: Logout successful
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LogoutResponse"
+    /auth/logout:
+        post:
+            tags:
+                - Auth
+            summary: Log out the current user
+            operationId: logoutUser
+            security:
+                - cookieAuth: []
+            responses:
+                "200":
+                    description: Logout successful
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/LogoutResponse"
 
-  /users/me:
-    get:
-      tags:
-        - Users
-      summary: Get the current user's profile
-      operationId: getMyProfile
-      security:
-        - cookieAuth: []
-      responses:
-        "200":
-          description: Current user profile
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/User"
-        "401":
-          description: Not authenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+    /users/me:
+        get:
+            tags:
+                - Users
+            summary: Get the current user's profile
+            operationId: getMyProfile
+            security:
+                - cookieAuth: []
+            responses:
+                "200":
+                    description: Current user profile
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/User"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
 
-    patch:
-      tags:
-        - Users
-      summary: Update the current user's editable profile fields
-      operationId: updateMyProfile
-      security:
-        - cookieAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UpdateMeRequest"
-      responses:
-        "200":
-          description: Updated user profile
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/User"
-        "400":
-          description: Invalid profile fields
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "401":
-          description: Not authenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+        patch:
+            tags:
+                - Users
+            summary: Update the current user's editable profile fields
+            operationId: updateMyProfile
+            security:
+                - cookieAuth: []
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/UpdateMeRequest"
+            responses:
+                "200":
+                    description: Updated user profile
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/User"
+                "400":
+                    description: Invalid profile fields
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
 
-  /classes:
-    get:
-      tags:
-        - Classes
-      summary: List classes the current user has joined
-      operationId: listClasses
-      security:
-        - cookieAuth: []
-      responses:
-        "200":
-          description: Class list
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Class"
-        "401":
-          description: Not authenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+    /classes:
+        get:
+            tags:
+                - Classes
+            summary: List classes the current user has joined
+            operationId: listClasses
+            security:
+                - cookieAuth: []
+            responses:
+                "200":
+                    description: Class list
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: "#/components/schemas/Class"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
 
-    post:
-      tags:
-        - Classes
-      summary: Create a class
-      operationId: createClass
-      security:
-        - cookieAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateClassRequest"
-      responses:
-        "201":
-          description: Class created
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Class"
-        "400":
-          description: Invalid class fields
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "401":
-          description: Not authenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "403":
-          description: Only teachers can create classes
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+        post:
+            tags:
+                - Classes
+            summary: Create a class
+            operationId: createClass
+            security:
+                - cookieAuth: []
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/CreateClassRequest"
+            responses:
+                "201":
+                    description: Class created
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Class"
+                "400":
+                    description: Invalid class fields
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "403":
+                    description: Only teachers can create classes
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
 
-  /classes/join:
-    post:
-      tags:
-        - Classes
-      summary: Join a class by invite code
-      operationId: joinClass
-      security:
-        - cookieAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/JoinClassRequest"
-      responses:
-        "201":
-          description: Joined class
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Class"
-        "400":
-          description: Invalid invite code
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "401":
-          description: Not authenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "404":
-          description: Class not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "409":
-          description: User has already joined the class
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+    /classes/join:
+        post:
+            tags:
+                - Classes
+            summary: Join a class by invite code
+            operationId: joinClass
+            security:
+                - cookieAuth: []
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/JoinClassRequest"
+            responses:
+                "201":
+                    description: Joined class
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Class"
+                "400":
+                    description: Invalid invite code
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Class not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "409":
+                    description: User has already joined the class
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
 
-  /classes/{classId}:
-    get:
-      tags:
-        - Classes
-      summary: Get a joined class
-      operationId: getClass
-      security:
-        - cookieAuth: []
-      parameters:
-        - in: path
-          name: classId
-          required: true
-          schema:
-            type: integer
-      responses:
-        "200":
-          description: Class detail
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Class"
-        "400":
-          description: Invalid class id
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "401":
-          description: Not authenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "404":
-          description: Class not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+    /classes/{classId}:
+        get:
+            tags:
+                - Classes
+            summary: Get a joined class
+            operationId: getClass
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: classId
+                  required: true
+                  schema:
+                      type: integer
+            responses:
+                "200":
+                    description: Class detail
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Class"
+                "400":
+                    description: Invalid class id
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Class not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
 
-  /classes/{classId}/members:
-    get:
-      tags:
-        - Classes
-      summary: List members of a joined class
-      operationId: listClassMembers
-      security:
-        - cookieAuth: []
-      parameters:
-        - in: path
-          name: classId
-          required: true
-          schema:
-            type: integer
-      responses:
-        "200":
-          description: Class members
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/ClassMember"
-        "400":
-          description: Invalid class id
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "401":
-          description: Not authenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "404":
-          description: Class not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+        patch:
+            tags:
+                - Classes
+            summary: Update a class
+            operationId: updateClass
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: classId
+                  required: true
+                  schema:
+                      type: integer
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/UpdateClassRequest"
+            responses:
+                "200":
+                    description: Updated class
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Class"
+                "400":
+                    description: Invalid class id or class fields
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "403":
+                    description: Only the class owner can update the class
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Class not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
 
-  /classes/{classId}/members/{memberId}:
-    patch:
-      tags:
-        - Classes
-      summary: Update a member's class role
-      operationId: updateClassMemberRole
-      security:
-        - cookieAuth: []
-      parameters:
-        - in: path
-          name: classId
-          required: true
-          schema:
-            type: integer
-        - in: path
-          name: memberId
-          required: true
-          schema:
-            type: integer
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UpdateClassMemberRoleRequest"
-      responses:
-        "200":
-          description: Updated class member
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ClassMember"
-        "400":
-          description: Invalid ids, role, or attempted owner role change
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "401":
-          description: Not authenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "403":
-          description: Only the class owner can update member roles
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "404":
-          description: Class or member not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+    /classes/{classId}/invite-code/rotate:
+        post:
+            tags:
+                - Classes
+            summary: Rotate a class invite code
+            operationId: rotateClassInviteCode
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: classId
+                  required: true
+                  schema:
+                      type: integer
+            responses:
+                "200":
+                    description: Updated class with a new invite code
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Class"
+                "400":
+                    description: Invalid class id
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "403":
+                    description: Only the class owner can rotate the invite code
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Class not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
 
-  /solochat/conversations:
-    get:
-      tags:
-        - SoloChat
-      summary: Get the current user's SoloChat conversations
-      operationId: listSoloChatConversations
-      security:
-        - cookieAuth: []
-      responses:
-        "200":
-          description: SoloChat conversations ordered by latest activity
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/SoloChatConversation"
-        "401":
-          description: Not authenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+    /classes/{classId}/leave:
+        post:
+            tags:
+                - Classes
+            summary: Leave a joined class
+            operationId: leaveClass
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: classId
+                  required: true
+                  schema:
+                      type: integer
+            responses:
+                "204":
+                    description: Left class successfully
+                "400":
+                    description: Invalid class id or the class owner cannot leave directly
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Class not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
 
-    post:
-      tags:
-        - SoloChat
-      summary: Create a new empty SoloChat conversation
-      operationId: createSoloChatConversation
-      security:
-        - cookieAuth: []
-      responses:
-        "201":
-          description: Conversation created
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SoloChatConversation"
-        "401":
-          description: Not authenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+    /classes/{classId}/members:
+        get:
+            tags:
+                - Classes
+            summary: List members of a joined class
+            operationId: listClassMembers
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: classId
+                  required: true
+                  schema:
+                      type: integer
+            responses:
+                "200":
+                    description: Class members
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: "#/components/schemas/ClassMember"
+                "400":
+                    description: Invalid class id
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Class not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
 
-  /solochat/conversations/{conversationId}:
-    patch:
-      tags:
-        - SoloChat
-      summary: Rename a SoloChat conversation
-      operationId: renameSoloChatConversation
-      security:
-        - cookieAuth: []
-      parameters:
-        - in: path
-          name: conversationId
-          required: true
-          schema:
-            type: integer
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RenameSoloChatConversationRequest"
-      responses:
-        "200":
-          description: Conversation renamed
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SoloChatConversation"
-        "400":
-          description: Invalid conversation id or title
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "401":
-          description: Not authenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "404":
-          description: Conversation not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+    /classes/{classId}/members/{memberId}:
+        patch:
+            tags:
+                - Classes
+            summary: Update a member's class role
+            operationId: updateClassMemberRole
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: classId
+                  required: true
+                  schema:
+                      type: integer
+                - in: path
+                  name: memberId
+                  required: true
+                  schema:
+                      type: integer
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/UpdateClassMemberRoleRequest"
+            responses:
+                "200":
+                    description: Updated class member
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ClassMember"
+                "400":
+                    description: Invalid ids, role, or attempted owner role change
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "403":
+                    description: Only the class owner can update member roles
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Class or member not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
 
-    delete:
-      tags:
-        - SoloChat
-      summary: Delete a SoloChat conversation
-      operationId: deleteSoloChatConversation
-      security:
-        - cookieAuth: []
-      parameters:
-        - in: path
-          name: conversationId
-          required: true
-          schema:
-            type: integer
-      responses:
-        "204":
-          description: Conversation deleted
-        "400":
-          description: Invalid conversation id
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "401":
-          description: Not authenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "404":
-          description: Conversation not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+        delete:
+            tags:
+                - Classes
+            summary: Remove a member from a class
+            operationId: removeClassMember
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: classId
+                  required: true
+                  schema:
+                      type: integer
+                - in: path
+                  name: memberId
+                  required: true
+                  schema:
+                      type: integer
+            responses:
+                "204":
+                    description: Member removed
+                "400":
+                    description: Invalid ids or attempted owner removal
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "403":
+                    description: Only the class owner can remove members
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Class or member not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
 
-  /solochat/conversations/{conversationId}/messages:
-    get:
-      tags:
-        - SoloChat
-      summary: Get all messages for a SoloChat conversation
-      operationId: listSoloChatMessages
-      security:
-        - cookieAuth: []
-      parameters:
-        - in: path
-          name: conversationId
-          required: true
-          schema:
-            type: integer
-      responses:
-        "200":
-          description: Conversation messages
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/SoloChatMessage"
-        "400":
-          description: Invalid conversation id
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "401":
-          description: Not authenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "404":
-          description: Conversation not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+    /classes/{classId}/assignments:
+        get:
+            tags:
+                - Assignments
+            summary: List assignments for a joined class
+            operationId: listClassAssignments
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: classId
+                  required: true
+                  schema:
+                      type: integer
+            responses:
+                "200":
+                    description: Class assignments
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: "#/components/schemas/Assignment"
+                "400":
+                    description: Invalid class id
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Class not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
 
-  /solochat/uploads/images:
-    post:
-      tags:
-        - SoloChat
-      summary: Upload and normalize a SoloChat image
-      operationId: uploadSoloChatImage
-      security:
-        - cookieAuth: []
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              required:
-                - image
-              properties:
-                image:
-                  type: string
-                  format: binary
-      responses:
-        "201":
-          description: Image uploaded and converted to WebP
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SoloChatUploadedImage"
-        "400":
-          description: Unsupported or oversized image
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "401":
-          description: Not authenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+        post:
+            tags:
+                - Assignments
+            summary: Create an assignment for a class
+            operationId: createClassAssignment
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: classId
+                  required: true
+                  schema:
+                      type: integer
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/CreateAssignmentRequest"
+            responses:
+                "201":
+                    description: Assignment created
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Assignment"
+                "400":
+                    description: Invalid class id or assignment fields
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "403":
+                    description: Only class teachers can create assignments
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Class not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
 
-  /solochat/images/{imageId}:
-    get:
-      tags:
-        - SoloChat
-      summary: Load a previously uploaded SoloChat image
-      operationId: getSoloChatImage
-      security:
-        - cookieAuth: []
-      parameters:
-        - in: path
-          name: imageId
-          required: true
-          schema:
-            type: integer
-      responses:
-        "200":
-          description: WebP image file
-          content:
-            image/webp:
-              schema:
-                type: string
-                format: binary
-        "401":
-          description: Not authenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "404":
-          description: Image not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-    delete:
-      tags:
-        - SoloChat
-      summary: Delete an unattached SoloChat image
-      operationId: deleteSoloChatImage
-      security:
-        - cookieAuth: []
-      parameters:
-        - in: path
-          name: imageId
-          required: true
-          schema:
-            type: integer
-      responses:
-        "204":
-          description: Image deleted
-        "401":
-          description: Not authenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "404":
-          description: Image not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "409":
-          description: Image is already attached to a message
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+    /assignments/{assignmentId}:
+        get:
+            tags:
+                - Assignments
+            summary: Get an assignment
+            operationId: getAssignment
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: assignmentId
+                  required: true
+                  schema:
+                      type: integer
+            responses:
+                "200":
+                    description: Assignment detail
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Assignment"
+                "400":
+                    description: Invalid assignment id
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Assignment not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
 
-  /solochat/conversations/{conversationId}/messages/stream:
-    post:
-      tags:
-        - SoloChat
-      summary: Store the user message and stream the assistant reply
-      description: >
-        Persists the user message immediately, creates an assistant placeholder
-        message with `status=streaming`, then streams newline-delimited JSON
-        events while the AI reply is generated. The user message is not returned
-        in the stream response.
-      operationId: streamSoloChatMessage
-      security:
-        - cookieAuth: []
-      parameters:
-        - in: path
-          name: conversationId
-          required: true
-          schema:
-            type: integer
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateSoloChatMessageRequest"
-      responses:
-        "200":
-          description: NDJSON stream of assistant events
-          content:
-            application/x-ndjson:
-              schema:
-                type: string
-                example: |
-                  {"type":"assistant_start","message":{"id":2,"conversationId":1,"role":"assistant","content":"","status":"streaming","attachments":[],"createdAt":"2026-03-23T09:31:00.500Z","updatedAt":"2026-03-23T09:31:00.500Z"}}
-                  {"type":"assistant_delta","messageId":2,"delta":"Start by drawing "}
-                  {"type":"assistant_delta","messageId":2,"delta":"the free-body diagram."}
-                  {"type":"conversation_title","conversation":{"id":1,"title":"Free-Body Diagram Basics","updatedAt":"2026-03-23T09:31:02.100Z"}}
-                  {"type":"assistant_done","message":{"id":2,"conversationId":1,"role":"assistant","content":"Start by drawing the free-body diagram.","status":"completed","attachments":[],"createdAt":"2026-03-23T09:31:00.500Z","updatedAt":"2026-03-23T09:31:02.050Z"}}
-        "400":
-          description: Invalid conversation id or message content
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "401":
-          description: Not authenticated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "404":
-          description: Conversation not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "500":
-          description: Internal server error or missing AI configuration before the stream starts
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+        patch:
+            tags:
+                - Assignments
+            summary: Update an assignment
+            operationId: updateAssignment
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: assignmentId
+                  required: true
+                  schema:
+                      type: integer
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/UpdateAssignmentRequest"
+            responses:
+                "200":
+                    description: Updated assignment
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Assignment"
+                "400":
+                    description: Invalid assignment id or assignment fields
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "403":
+                    description: Only class teachers can update assignments
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Assignment not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+        delete:
+            tags:
+                - Assignments
+            summary: Delete or archive an assignment
+            operationId: deleteAssignment
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: assignmentId
+                  required: true
+                  schema:
+                      type: integer
+            responses:
+                "204":
+                    description: Assignment deleted or archived
+                "400":
+                    description: Invalid assignment id or assignment cannot be deleted in its current state
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "403":
+                    description: Only class teachers can delete assignments
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Assignment not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+    /assignments/{assignmentId}/publish:
+        post:
+            tags:
+                - Assignments
+            summary: Publish a draft assignment
+            operationId: publishAssignment
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: assignmentId
+                  required: true
+                  schema:
+                      type: integer
+            responses:
+                "200":
+                    description: Assignment published
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Assignment"
+                "400":
+                    description: Invalid assignment id or assignment cannot be published
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "403":
+                    description: Only class teachers can publish assignments
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Assignment not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+    /assignments/{assignmentId}/close:
+        post:
+            tags:
+                - Assignments
+            summary: Close an assignment
+            operationId: closeAssignment
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: assignmentId
+                  required: true
+                  schema:
+                      type: integer
+            responses:
+                "200":
+                    description: Assignment closed
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/Assignment"
+                "400":
+                    description: Invalid assignment id or assignment cannot be closed
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "403":
+                    description: Only class teachers can close assignments
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Assignment not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+    /assignments/{assignmentId}/submissions:
+        get:
+            tags:
+                - Assignments
+            summary: List all student submissions for an assignment
+            operationId: listAssignmentSubmissions
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: assignmentId
+                  required: true
+                  schema:
+                      type: integer
+            responses:
+                "200":
+                    description: Assignment submissions for the class roster
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: "#/components/schemas/AssignmentSubmission"
+                "400":
+                    description: Invalid assignment id
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "403":
+                    description: Only class teachers can view all submissions
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Assignment not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+    /assignments/{assignmentId}/submissions/me:
+        get:
+            tags:
+                - Assignments
+            summary: Get the current student's submission for an assignment
+            operationId: getMyAssignmentSubmission
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: assignmentId
+                  required: true
+                  schema:
+                      type: integer
+            responses:
+                "200":
+                    description: Current student's submission, or a placeholder with submissionStatus=not_started
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/AssignmentSubmission"
+                "400":
+                    description: Invalid assignment id
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "403":
+                    description: Only class students can use this endpoint
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Assignment not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+        put:
+            tags:
+                - Assignments
+            summary: Save or submit the current student's assignment submission
+            operationId: upsertMyAssignmentSubmission
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: assignmentId
+                  required: true
+                  schema:
+                      type: integer
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/UpsertMyAssignmentSubmissionRequest"
+            responses:
+                "200":
+                    description: Saved or submitted assignment submission
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/AssignmentSubmission"
+                "400":
+                    description: Invalid assignment id, submission fields, or submission not allowed
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "403":
+                    description: Only class students can submit work for this assignment
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Assignment not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+    /assignments/{assignmentId}/submissions/{studentId}:
+        get:
+            tags:
+                - Assignments
+            summary: Get one student's submission for an assignment
+            operationId: getAssignmentSubmissionForStudent
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: assignmentId
+                  required: true
+                  schema:
+                      type: integer
+                - in: path
+                  name: studentId
+                  required: true
+                  schema:
+                      type: integer
+            responses:
+                "200":
+                    description: Student submission detail
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/AssignmentSubmission"
+                "400":
+                    description: Invalid assignment id or student id
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "403":
+                    description: Only class teachers can view another student's submission
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Assignment or student submission not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+    /assignments/{assignmentId}/submissions/{studentId}/review:
+        patch:
+            tags:
+                - Assignments
+            summary: Review a student's assignment submission
+            operationId: reviewAssignmentSubmission
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: assignmentId
+                  required: true
+                  schema:
+                      type: integer
+                - in: path
+                  name: studentId
+                  required: true
+                  schema:
+                      type: integer
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/ReviewAssignmentSubmissionRequest"
+            responses:
+                "200":
+                    description: Reviewed submission
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/AssignmentSubmission"
+                "400":
+                    description: Invalid ids or review fields
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "403":
+                    description: Only class teachers can review submissions
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Assignment or student submission not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+    /dashboards/teacher/classes:
+        get:
+            tags:
+                - Dashboards
+            summary: Get the teacher's class overview dashboard
+            operationId: getTeacherClassesDashboard
+            security:
+                - cookieAuth: []
+            responses:
+                "200":
+                    description: Teacher class dashboard
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/TeacherClassesDashboard"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "403":
+                    description: Only teachers can access this dashboard
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+    /dashboards/teacher/assignments:
+        get:
+            tags:
+                - Dashboards
+            summary: Get the teacher's assignment overview dashboard
+            operationId: getTeacherAssignmentsDashboard
+            security:
+                - cookieAuth: []
+            responses:
+                "200":
+                    description: Teacher assignment dashboard
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/TeacherAssignmentsDashboard"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "403":
+                    description: Only teachers can access this dashboard
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+    /dashboards/classes/{classId}:
+        get:
+            tags:
+                - Dashboards
+            summary: Get a teacher-facing class dashboard
+            operationId: getClassDashboard
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: classId
+                  required: true
+                  schema:
+                      type: integer
+            responses:
+                "200":
+                    description: Class dashboard
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ClassDashboard"
+                "400":
+                    description: Invalid class id
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "403":
+                    description: Only class teachers can access this dashboard
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Class not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+    /dashboards/classes/{classId}/assignments/{assignmentId}:
+        get:
+            tags:
+                - Dashboards
+            summary: Get a teacher-facing assignment dashboard for one class
+            operationId: getClassAssignmentDashboard
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: classId
+                  required: true
+                  schema:
+                      type: integer
+                - in: path
+                  name: assignmentId
+                  required: true
+                  schema:
+                      type: integer
+            responses:
+                "200":
+                    description: Assignment dashboard for a class
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/AssignmentClassDashboard"
+                "400":
+                    description: Invalid class id or assignment id
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "403":
+                    description: Only class teachers can access this dashboard
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Class or assignment not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+    /dashboards/student/assignments:
+        get:
+            tags:
+                - Dashboards
+            summary: Get the current student's assignment dashboard
+            operationId: getStudentAssignmentsDashboard
+            security:
+                - cookieAuth: []
+            responses:
+                "200":
+                    description: Student assignments dashboard
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/StudentAssignmentsDashboard"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "403":
+                    description: Only students can access this dashboard
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+    /uploads/files:
+        post:
+            tags:
+                - Uploads
+            summary: Upload a reusable file attachment
+            operationId: uploadFile
+            security:
+                - cookieAuth: []
+            requestBody:
+                required: true
+                content:
+                    multipart/form-data:
+                        schema:
+                            type: object
+                            required:
+                                - file
+                            properties:
+                                file:
+                                    type: string
+                                    format: binary
+                purpose:
+                    type: string
+                    enum:
+                        [assignment_attachment, submission_attachment, solochat]
+                    example: solochat
+            responses:
+                "201":
+                    description: File uploaded
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/FileAsset"
+                "400":
+                    description: Unsupported or oversized file
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+    /uploads/files/{fileId}:
+        get:
+            tags:
+                - Uploads
+            summary: Download a previously uploaded file attachment
+            operationId: getUploadedFile
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: fileId
+                  required: true
+                  schema:
+                      type: integer
+            responses:
+                "200":
+                    description: Uploaded file
+                    content:
+                        application/octet-stream:
+                            schema:
+                                type: string
+                                format: binary
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: File not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+        delete:
+            tags:
+                - Uploads
+            summary: Delete an unattached uploaded file
+            operationId: deleteUploadedFile
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: fileId
+                  required: true
+                  schema:
+                      type: integer
+            responses:
+                "204":
+                    description: Uploaded file deleted
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: File not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "409":
+                    description: File is already attached to an assignment or submission
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+    /solochat/conversations:
+        get:
+            tags:
+                - SoloChat
+            summary: Get the current user's SoloChat conversations
+            operationId: listSoloChatConversations
+            security:
+                - cookieAuth: []
+            responses:
+                "200":
+                    description: SoloChat conversations ordered by latest activity
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: "#/components/schemas/SoloChatConversation"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+        post:
+            tags:
+                - SoloChat
+            summary: Create a new empty SoloChat conversation
+            operationId: createSoloChatConversation
+            security:
+                - cookieAuth: []
+            responses:
+                "201":
+                    description: Conversation created
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/SoloChatConversation"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+    /solochat/conversations/{conversationId}:
+        patch:
+            tags:
+                - SoloChat
+            summary: Rename a SoloChat conversation
+            operationId: renameSoloChatConversation
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: conversationId
+                  required: true
+                  schema:
+                      type: integer
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/RenameSoloChatConversationRequest"
+            responses:
+                "200":
+                    description: Conversation renamed
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/SoloChatConversation"
+                "400":
+                    description: Invalid conversation id or title
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Conversation not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+        delete:
+            tags:
+                - SoloChat
+            summary: Delete a SoloChat conversation
+            operationId: deleteSoloChatConversation
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: conversationId
+                  required: true
+                  schema:
+                      type: integer
+            responses:
+                "204":
+                    description: Conversation deleted
+                "400":
+                    description: Invalid conversation id
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Conversation not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+    /solochat/conversations/{conversationId}/messages:
+        get:
+            tags:
+                - SoloChat
+            summary: Get all messages for a SoloChat conversation
+            operationId: listSoloChatMessages
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: conversationId
+                  required: true
+                  schema:
+                      type: integer
+            responses:
+                "200":
+                    description: Conversation messages
+                    content:
+                        application/json:
+                            schema:
+                                type: array
+                                items:
+                                    $ref: "#/components/schemas/SoloChatMessage"
+                "400":
+                    description: Invalid conversation id
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Conversation not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+    /solochat/conversations/{conversationId}/messages/stream:
+        post:
+            tags:
+                - SoloChat
+            summary: Store the user message and stream the assistant reply
+            description: >
+                Persists the user message immediately, creates an assistant placeholder
+                message with `status=streaming`, then streams newline-delimited JSON
+                events while the AI reply is generated. The user message is not returned
+                in the stream response.
+            operationId: streamSoloChatMessage
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: conversationId
+                  required: true
+                  schema:
+                      type: integer
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/CreateSoloChatMessageRequest"
+            responses:
+                "200":
+                    description: NDJSON stream of assistant events
+                    content:
+                        application/x-ndjson:
+                            schema:
+                                type: string
+                                example: |
+                                    {"type":"assistant_start","message":{"id":2,"conversationId":1,"role":"assistant","content":"","status":"streaming","attachments":[],"createdAt":"2026-03-23T09:31:00.500Z","updatedAt":"2026-03-23T09:31:00.500Z"}}
+                                    {"type":"assistant_delta","messageId":2,"delta":"Start by drawing "}
+                                    {"type":"assistant_delta","messageId":2,"delta":"the free-body diagram."}
+                                    {"type":"conversation_title","conversation":{"id":1,"title":"Free-Body Diagram Basics","updatedAt":"2026-03-23T09:31:02.100Z"}}
+                                    {"type":"assistant_done","message":{"id":2,"conversationId":1,"role":"assistant","content":"Start by drawing the free-body diagram.","status":"completed","attachments":[],"createdAt":"2026-03-23T09:31:00.500Z","updatedAt":"2026-03-23T09:31:02.050Z"}}
+                "400":
+                    description: Invalid conversation id or message content
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Conversation not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "500":
+                    description: Internal server error or missing AI configuration before the stream starts
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"

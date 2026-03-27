@@ -57,7 +57,7 @@ function createSoloChatConversationService(db) {
             conversationId,
         );
 
-        return attachImages(messages);
+        return attachAttachments(messages);
     }
 
     async function createMessage({
@@ -97,7 +97,7 @@ function createSoloChatConversationService(db) {
             return null;
         }
 
-        const [hydratedMessage] = await attachImages([message]);
+        const [hydratedMessage] = await attachAttachments([message]);
         return hydratedMessage;
     }
 
@@ -122,11 +122,7 @@ function createSoloChatConversationService(db) {
         );
     }
 
-    async function updateMessage({
-        messageId,
-        content,
-        status,
-    }) {
+    async function updateMessage({ messageId, content, status }) {
         await db.run(
             `UPDATE solochat_messages
              SET content = ?, status = ?, updated_at = ${nowExpression}
@@ -156,31 +152,34 @@ function createSoloChatConversationService(db) {
         return result.changes;
     }
 
-    async function attachImages(messages) {
+    async function attachAttachments(messages) {
         if (!messages.length) {
             return [];
         }
 
         const messageIds = messages.map((message) => message.id);
         const placeholders = messageIds.map(() => "?").join(", ");
-        const images = await db.all(
-            `SELECT id, user_id, message_id, storage_path, mime_type, width, height, size_bytes, created_at
-             FROM solochat_images
-             WHERE message_id IN (${placeholders})
-             ORDER BY id ASC`,
+        const attachments = await db.all(
+            `SELECT uf.id, uf.owner_user_id, smf.message_id, uf.storage_path, uf.file_name, uf.mime_type, uf.size_bytes, uf.width, uf.height, uf.kind, uf.purpose, uf.created_at
+             FROM solochat_message_files smf
+             INNER JOIN uploaded_files uf
+                 ON uf.id = smf.file_id
+             WHERE smf.message_id IN (${placeholders})
+             ORDER BY uf.id ASC`,
             ...messageIds,
         );
-        const imagesByMessageId = new Map();
+        const attachmentsByMessageId = new Map();
 
-        for (const image of images) {
-            const current = imagesByMessageId.get(image.message_id) || [];
-            current.push(image);
-            imagesByMessageId.set(image.message_id, current);
+        for (const attachment of attachments) {
+            const current =
+                attachmentsByMessageId.get(attachment.message_id) || [];
+            current.push(attachment);
+            attachmentsByMessageId.set(attachment.message_id, current);
         }
 
         return messages.map((message) => ({
             ...message,
-            attachments: imagesByMessageId.get(message.id) || [],
+            attachments: attachmentsByMessageId.get(message.id) || [],
         }));
     }
 

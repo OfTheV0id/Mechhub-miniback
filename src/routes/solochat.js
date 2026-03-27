@@ -1,5 +1,5 @@
+const fs = require("node:fs/promises");
 const express = require("express");
-const multer = require("multer");
 const { withImmediateTransaction } = require("../lib/db");
 const { toIsoTimestamp } = require("../lib/time");
 const {
@@ -7,26 +7,9 @@ const {
 } = require("../services/solochat/conversation-service");
 const { createSoloChatAiService } = require("../services/solochat/ai-service");
 const {
-    ALLOWED_IMAGE_MIME_TYPES,
-    MAX_UPLOAD_BYTES,
-    createSoloChatImageService,
-} = require("../services/solochat/image-service");
-
-const upload = multer({
-    storage: multer.memoryStorage(),
-    limits: {
-        fileSize: MAX_UPLOAD_BYTES,
-        files: 1,
-    },
-    fileFilter(req, file, callback) {
-        if (!ALLOWED_IMAGE_MIME_TYPES.has(file.mimetype)) {
-            callback(badRequest("Unsupported image type"));
-            return;
-        }
-
-        callback(null, true);
-    },
-});
+    createFileService,
+    FILE_PURPOSES,
+} = require("../services/uploads/file-service");
 
 function badRequest(message) {
     const error = new Error(message);
@@ -65,18 +48,32 @@ function parseConversationId(value) {
     return conversationId;
 }
 
-function parseImageId(value) {
+function parseAttachmentIds(value) {
     if (value === undefined || value === null || value === "") {
-        return null;
+        return [];
     }
 
-    const imageId = Number(value);
-
-    if (!Number.isInteger(imageId) || imageId <= 0) {
-        throw badRequest("imageId must be a positive integer");
+    if (!Array.isArray(value)) {
+        throw badRequest("attachmentIds must be an array of positive integers");
     }
 
-    return imageId;
+    const seen = new Set();
+    return value.map((entry) => {
+        const attachmentId = Number(entry);
+
+        if (!Number.isInteger(attachmentId) || attachmentId <= 0) {
+            throw badRequest(
+                "attachmentIds must be an array of positive integers",
+            );
+        }
+
+        if (seen.has(attachmentId)) {
+            throw badRequest("attachmentIds must not contain duplicates");
+        }
+
+        seen.add(attachmentId);
+        return attachmentId;
+    });
 }
 
 function parseTitle(value) {
@@ -103,15 +100,15 @@ function parseMessageInput(body = {}) {
     }
 
     const content = typeof body.content === "string" ? body.content.trim() : "";
-    const imageId = parseImageId(body.imageId);
+    const attachmentIds = parseAttachmentIds(body.attachmentIds);
 
-    if (!content && !imageId) {
-        throw badRequest("content or imageId is required");
+    if (!content && !attachmentIds.length) {
+        throw badRequest("content or attachmentIds is required");
     }
 
     return {
         content,
-        imageId,
+        attachmentIds,
     };
 }
 
@@ -126,11 +123,13 @@ function sanitizeConversation(conversation) {
 function sanitizeAttachment(attachment) {
     return {
         id: attachment.id,
-        kind: "image",
-        url: `/solochat/images/${attachment.id}`,
+        kind: attachment.kind,
+        purpose: attachment.purpose,
+        fileName: attachment.file_name,
+        url: `/uploads/files/${attachment.id}`,
         mimeType: attachment.mime_type,
-        width: attachment.width,
-        height: attachment.height,
+        width: attachment.width ?? null,
+        height: attachment.height ?? null,
         sizeBytes: attachment.size_bytes,
         createdAt: toIsoTimestamp(attachment.created_at),
     };
@@ -149,60 +148,38 @@ function sanitizeMessage(message) {
     };
 }
 
-function sanitizeImageUpload(image) {
-    return {
-        id: image.id,
-        url: `/solochat/images/${image.id}`,
-        mimeType: image.mime_type,
-        width: image.width,
-        height: image.height,
-        sizeBytes: image.size_bytes,
-        createdAt: toIsoTimestamp(image.created_at),
-    };
-}
-
 function writeStreamEvent(res, payload) {
     res.write(`${JSON.stringify(payload)}\n`);
 }
 
-function singleFileUpload(req, res) {
-    return new Promise((resolve, reject) => {
-        upload.single("image")(req, res, (error) => {
-            if (!error) {
-                resolve();
-                return;
-            }
-
-            if (error instanceof multer.MulterError) {
-                if (error.code === "LIMIT_FILE_SIZE") {
-                    reject(badRequest("Image exceeds the 20MB upload limit"));
-                    return;
+async function deleteStoredAttachments(attachments) {
+    await Promise.all(
+        attachments.map(async (attachment) => {
+            try {
+                await fs.unlink(attachment.storage_path);
+            } catch (error) {
+                if (error?.code !== "ENOENT") {
+                    throw error;
                 }
-
-                reject(badRequest("Image upload failed"));
-                return;
             }
-
-            reject(error);
-        });
-    });
+        }),
+    );
 }
 
 function createSoloChatRouter(db) {
     const router = express.Router();
     const conversationService = createSoloChatConversationService(db);
-    const imageService = createSoloChatImageService(db);
+    const fileService = createFileService(db);
     const aiService = createSoloChatAiService({
         db,
-        imageService,
+        attachmentService: fileService,
     });
 
     router.get("/conversations", async (req, res, next) => {
         try {
             const userId = requireUserId(req);
-            const conversations = await conversationService.listConversationsForUser(
-                userId,
-            );
+            const conversations =
+                await conversationService.listConversationsForUser(userId);
 
             return res.json(conversations.map(sanitizeConversation));
         } catch (error) {
@@ -226,12 +203,15 @@ function createSoloChatRouter(db) {
     router.patch("/conversations/:conversationId", async (req, res, next) => {
         try {
             const userId = requireUserId(req);
-            const conversationId = parseConversationId(req.params.conversationId);
+            const conversationId = parseConversationId(
+                req.params.conversationId,
+            );
             const title = parseTitle(req.body?.title);
-            const conversation = await conversationService.getConversationForUser({
-                conversationId,
-                userId,
-            });
+            const conversation =
+                await conversationService.getConversationForUser({
+                    conversationId,
+                    userId,
+                });
 
             if (!conversation) {
                 throw notFound("Conversation not found");
@@ -252,96 +232,33 @@ function createSoloChatRouter(db) {
     router.delete("/conversations/:conversationId", async (req, res, next) => {
         try {
             const userId = requireUserId(req);
-            const conversationId = parseConversationId(req.params.conversationId);
-            const conversation = await conversationService.getConversationForUser({
-                conversationId,
-                userId,
-            });
+            const conversationId = parseConversationId(
+                req.params.conversationId,
+            );
+            const conversation =
+                await conversationService.getConversationForUser({
+                    conversationId,
+                    userId,
+                });
 
             if (!conversation) {
                 throw notFound("Conversation not found");
             }
 
-            const images = await imageService.listImagesForConversation(conversationId);
+            const attachments =
+                await fileService.listFilesForConversation(conversationId);
             await conversationService.deleteConversation({
                 conversationId,
                 userId,
             });
-            await imageService.deleteStoredFiles(images);
 
-            return res.status(204).end();
-        } catch (error) {
-            return next(error);
-        }
-    });
-
-    router.get("/conversations/:conversationId/messages", async (req, res, next) => {
-        try {
-            const userId = requireUserId(req);
-            const conversationId = parseConversationId(req.params.conversationId);
-            const conversation = await conversationService.getConversationForUser({
-                conversationId,
-                userId,
-            });
-
-            if (!conversation) {
-                throw notFound("Conversation not found");
-            }
-
-            const messages = await conversationService.listMessages(conversationId);
-            return res.json(messages.map(sanitizeMessage));
-        } catch (error) {
-            return next(error);
-        }
-    });
-
-    router.post("/uploads/images", async (req, res, next) => {
-        try {
-            const userId = requireUserId(req);
-            await imageService.purgeStaleUnattachedImages({ userId });
-            await imageService.purgeOrphanedFiles({ userId });
-            await singleFileUpload(req, res);
-            const image = await imageService.processUpload({
-                userId,
-                file: req.file,
-            });
-
-            return res.status(201).json(sanitizeImageUpload(image));
-        } catch (error) {
-            return next(error);
-        }
-    });
-
-    router.get("/images/:imageId", async (req, res, next) => {
-        try {
-            const userId = requireUserId(req);
-            const imageId = parseImageId(req.params.imageId);
-            const image = await imageService.getImageForUser({
-                imageId,
-                userId,
-            });
-
-            if (!image) {
-                throw notFound("Image not found");
-            }
-
-            return res.type(image.mime_type).sendFile(image.storage_path);
-        } catch (error) {
-            return next(error);
-        }
-    });
-
-    router.delete("/images/:imageId", async (req, res, next) => {
-        try {
-            const userId = requireUserId(req);
-            const imageId = parseImageId(req.params.imageId);
-            const deleted = await imageService.deleteUnattachedImageForUser({
-                imageId,
-                userId,
-            });
-
-            if (!deleted) {
-                throw notFound("Image not found");
+            if (attachments.length) {
+                const placeholders = attachments.map(() => "?").join(", ");
+                await db.run(
+                    `DELETE FROM uploaded_files WHERE id IN (${placeholders})`,
+                    ...attachments.map((attachment) => attachment.id),
+                );
+                await deleteStoredAttachments(attachments);
             }
 
             return res.status(204).end();
@@ -349,6 +266,33 @@ function createSoloChatRouter(db) {
             return next(error);
         }
     });
+
+    router.get(
+        "/conversations/:conversationId/messages",
+        async (req, res, next) => {
+            try {
+                const userId = requireUserId(req);
+                const conversationId = parseConversationId(
+                    req.params.conversationId,
+                );
+                const conversation =
+                    await conversationService.getConversationForUser({
+                        conversationId,
+                        userId,
+                    });
+
+                if (!conversation) {
+                    throw notFound("Conversation not found");
+                }
+
+                const messages =
+                    await conversationService.listMessages(conversationId);
+                return res.json(messages.map(sanitizeMessage));
+            } catch (error) {
+                return next(error);
+            }
+        },
+    );
 
     router.post(
         "/conversations/:conversationId/messages/stream",
@@ -359,52 +303,64 @@ function createSoloChatRouter(db) {
 
             try {
                 const userId = requireUserId(req);
-                const conversationId = parseConversationId(req.params.conversationId);
-                const { content, imageId } = parseMessageInput(req.body);
-                const conversation = await conversationService.getConversationForUser({
-                    conversationId,
-                    userId,
-                });
+                const conversationId = parseConversationId(
+                    req.params.conversationId,
+                );
+                const { content, attachmentIds } = parseMessageInput(req.body);
+                const conversation =
+                    await conversationService.getConversationForUser({
+                        conversationId,
+                        userId,
+                    });
 
                 if (!conversation) {
                     throw notFound("Conversation not found");
                 }
 
-                if (imageId) {
-                    const image = await imageService.getImageForUser({
-                        imageId,
+                for (const attachmentId of attachmentIds) {
+                    const attachment = await fileService.getFileForOwner({
+                        fileId: attachmentId,
                         userId,
                     });
 
-                    if (!image || image.message_id) {
-                        throw badRequest("imageId is invalid or has already been used");
+                    if (
+                        !attachment ||
+                        attachment.purpose !== FILE_PURPOSES.SOLOCHAT ||
+                        !["image", "document"].includes(attachment.kind)
+                    ) {
+                        throw badRequest(
+                            "attachmentIds contain an invalid or unsupported attachment",
+                        );
                     }
                 }
 
-                await imageService.purgeStaleUnattachedImages({ userId });
-                await imageService.purgeOrphanedFiles({ userId });
                 await withImmediateTransaction(async (txDb) => {
-                    const txConversationService = createSoloChatConversationService(txDb);
-                    const txImageService = createSoloChatImageService(txDb);
-                    const userMessage = await txConversationService.createMessage({
-                        conversationId,
-                        role: "user",
-                        content,
-                        status: "completed",
-                    });
+                    const txConversationService =
+                        createSoloChatConversationService(txDb);
+                    const txFileService = createFileService(txDb);
+                    const userMessage =
+                        await txConversationService.createMessage({
+                            conversationId,
+                            role: "user",
+                            content,
+                            status: "completed",
+                        });
 
-                    if (imageId) {
-                        await txImageService.attachImageToMessage({
-                            imageId,
-                            userId,
+                    if (attachmentIds.length) {
+                        await txFileService.attachFilesToSoloChatMessage({
                             messageId: userMessage.id,
+                            fileIds: attachmentIds,
+                            userId,
                         });
                     }
 
-                    await txConversationService.touchConversation(conversationId);
+                    await txConversationService.touchConversation(
+                        conversationId,
+                    );
                 });
 
-                const history = await conversationService.listMessages(conversationId);
+                const history =
+                    await conversationService.listMessages(conversationId);
                 assistantMessage = await conversationService.createMessage({
                     conversationId,
                     role: "assistant",
@@ -413,7 +369,10 @@ function createSoloChatRouter(db) {
                 });
 
                 res.status(200);
-                res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+                res.setHeader(
+                    "Content-Type",
+                    "application/x-ndjson; charset=utf-8",
+                );
                 res.setHeader("Cache-Control", "no-cache, no-transform");
                 res.setHeader("Connection", "keep-alive");
                 res.flushHeaders();
@@ -468,11 +427,12 @@ function createSoloChatRouter(db) {
             } catch (error) {
                 if (streamStarted) {
                     if (assistantMessage) {
-                        assistantMessage = await conversationService.updateMessage({
-                            messageId: assistantMessage.id,
-                            content: assistantContentBuffer,
-                            status: "failed",
-                        });
+                        assistantMessage =
+                            await conversationService.updateMessage({
+                                messageId: assistantMessage.id,
+                                content: assistantContentBuffer,
+                                status: "failed",
+                            });
                     }
 
                     writeStreamEvent(res, {
