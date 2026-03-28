@@ -650,9 +650,7 @@ async function normalizeUploadForPurpose({ file, purpose }) {
 
 function validatePurpose(value) {
     if (!Object.values(FILE_PURPOSES).includes(value)) {
-        throw badRequest(
-            "purpose must be assignment_attachment, submission_attachment, or solochat",
-        );
+        throw badRequest("purpose must be a supported upload purpose");
     }
 
     return value;

@@ -970,15 +970,16 @@ components:
 
         CreateSoloChatMessageRequest:
             type: object
+            description: Multipart request shape for sending a SoloChat message with inline attachments.
             properties:
                 content:
                     type: string
                     example: Explain free-body diagrams.
-                attachmentIds:
+                attachments:
                     type: array
                     items:
-                        type: integer
-                    example: [7, 8, 9]
+                        type: string
+                        format: binary
 
         SoloChatImageAttachment:
             type: object
@@ -2394,7 +2395,7 @@ paths:
         post:
             tags:
                 - Uploads
-            summary: Upload a reusable file attachment
+            summary: Upload a reusable assignment or submission attachment
             operationId: uploadFile
             security:
                 - cookieAuth: []
@@ -2406,15 +2407,16 @@ paths:
                             type: object
                             required:
                                 - file
+                                - purpose
                             properties:
                                 file:
                                     type: string
                                     format: binary
-                purpose:
-                    type: string
-                    enum:
-                        [assignment_attachment, submission_attachment, solochat]
-                    example: solochat
+                                purpose:
+                                    type: string
+                                    enum:
+                                        [assignment_attachment, submission_attachment]
+                                    example: assignment_attachment
             responses:
                 "201":
                     description: File uploaded
@@ -2423,7 +2425,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/FileAsset"
                 "400":
-                    description: Unsupported or oversized file
+                    description: Invalid purpose, unsupported file, or oversized file
                     content:
                         application/json:
                             schema:
@@ -2499,7 +2501,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/ErrorResponse"
                 "409":
-                    description: File is already attached to an assignment or submission
+                    description: File is already attached to an assignment, submission, or SoloChat message
                     content:
                         application/json:
                             schema:
@@ -2679,7 +2681,8 @@ paths:
                 - SoloChat
             summary: Store the user message and stream the assistant reply
             description: >
-                Persists the user message immediately, creates an assistant placeholder
+                Persists the user message immediately, optionally stores inline multipart
+                attachments on that same message, creates an assistant placeholder
                 message with `status=streaming`, then streams newline-delimited JSON
                 events while the AI reply is generated. The user message is not returned
                 in the stream response.
@@ -2695,17 +2698,18 @@ paths:
             requestBody:
                 required: true
                 content:
-                    application/json:
+                    multipart/form-data:
                         schema:
                             $ref: "#/components/schemas/CreateSoloChatMessageRequest"
             responses:
                 "200":
-                    description: NDJSON stream of assistant events
+                    description: NDJSON stream of persisted user and assistant events
                     content:
                         application/x-ndjson:
                             schema:
                                 type: string
                                 example: |
+                                    {"type":"user_input","message":{"id":1,"conversationId":1,"role":"user","content":"Explain this image.","status":"completed","attachments":[{"id":7,"kind":"image","purpose":"solochat","fileName":"beam.png","url":"/uploads/files/7","mimeType":"image/webp","width":1536,"height":1024,"sizeBytes":482913,"createdAt":"2026-03-23T09:31:00.300Z"}],"createdAt":"2026-03-23T09:31:00.400Z","updatedAt":"2026-03-23T09:31:00.400Z"}}
                                     {"type":"assistant_start","message":{"id":2,"conversationId":1,"role":"assistant","content":"","status":"streaming","attachments":[],"createdAt":"2026-03-23T09:31:00.500Z","updatedAt":"2026-03-23T09:31:00.500Z"}}
                                     {"type":"assistant_delta","messageId":2,"delta":"Start by drawing "}
                                     {"type":"assistant_delta","messageId":2,"delta":"the free-body diagram."}
@@ -2713,6 +2717,12 @@ paths:
                                     {"type":"assistant_done","message":{"id":2,"conversationId":1,"role":"assistant","content":"Start by drawing the free-body diagram.","status":"completed","attachments":[],"createdAt":"2026-03-23T09:31:00.500Z","updatedAt":"2026-03-23T09:31:02.050Z"}}
                 "400":
                     description: Invalid conversation id or message content
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "415":
+                    description: Content-Type must be multipart/form-data
                     content:
                         application/json:
                             schema:

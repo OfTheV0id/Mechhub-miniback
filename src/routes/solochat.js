@@ -1,5 +1,6 @@
 const fs = require("node:fs/promises");
 const express = require("express");
+const multer = require("multer");
 const { withImmediateTransaction } = require("../lib/db");
 const { toIsoTimestamp } = require("../lib/time");
 const {
@@ -9,7 +10,17 @@ const { createSoloChatAiService } = require("../services/solochat/ai-service");
 const {
     createFileService,
     FILE_PURPOSES,
+    MAX_UPLOAD_BYTES,
 } = require("../services/uploads/file-service");
+
+const MAX_SOLOCHAT_ATTACHMENTS = 4;
+const solochatUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+        fileSize: MAX_UPLOAD_BYTES,
+        files: MAX_SOLOCHAT_ATTACHMENTS,
+    },
+});
 
 function badRequest(message) {
     const error = new Error(message);
@@ -27,6 +38,13 @@ function unauthorized(message) {
 function notFound(message) {
     const error = new Error(message);
     error.statusCode = 404;
+    return error;
+}
+
+function unsupportedMediaType(message) {
+    const error = new Error(message);
+    error.statusCode = 415;
+    error.expose = true;
     return error;
 }
 
@@ -48,34 +66,6 @@ function parseConversationId(value) {
     return conversationId;
 }
 
-function parseAttachmentIds(value) {
-    if (value === undefined || value === null || value === "") {
-        return [];
-    }
-
-    if (!Array.isArray(value)) {
-        throw badRequest("attachmentIds must be an array of positive integers");
-    }
-
-    const seen = new Set();
-    return value.map((entry) => {
-        const attachmentId = Number(entry);
-
-        if (!Number.isInteger(attachmentId) || attachmentId <= 0) {
-            throw badRequest(
-                "attachmentIds must be an array of positive integers",
-            );
-        }
-
-        if (seen.has(attachmentId)) {
-            throw badRequest("attachmentIds must not contain duplicates");
-        }
-
-        seen.add(attachmentId);
-        return attachmentId;
-    });
-}
-
 function parseTitle(value) {
     const title = String(value || "").trim();
 
@@ -90,7 +80,16 @@ function parseTitle(value) {
     return title;
 }
 
-function parseMessageInput(body = {}) {
+function parseStreamMessageInput(req) {
+    if (!req.is("multipart/form-data")) {
+        throw unsupportedMediaType(
+            "Content-Type must be multipart/form-data",
+        );
+    }
+
+    const body = req.body || {};
+    const uploadedFiles = normalizeMultipartFiles(req.files);
+
     if (
         body.content !== undefined &&
         body.content !== null &&
@@ -100,16 +99,86 @@ function parseMessageInput(body = {}) {
     }
 
     const content = typeof body.content === "string" ? body.content.trim() : "";
-    const attachmentIds = parseAttachmentIds(body.attachmentIds);
 
-    if (!content && !attachmentIds.length) {
-        throw badRequest("content or attachmentIds is required");
+    if (!content && !uploadedFiles.length) {
+        throw badRequest("content or attachments is required");
     }
 
     return {
         content,
-        attachmentIds,
+        uploadedFiles,
     };
+}
+
+function normalizeMultipartFiles(files) {
+    if (!files) {
+        return [];
+    }
+
+    const uploadedFiles = [
+        ...(Array.isArray(files.attachments) ? files.attachments : []),
+        ...(Array.isArray(files["attachments[]"])
+            ? files["attachments[]"]
+            : []),
+    ];
+
+    if (uploadedFiles.length > MAX_SOLOCHAT_ATTACHMENTS) {
+        throw badRequest(
+            `attachments must contain ${MAX_SOLOCHAT_ATTACHMENTS} files or fewer`,
+        );
+    }
+
+    return uploadedFiles;
+}
+
+function parseSoloChatUpload(req, res) {
+    return new Promise((resolve, reject) => {
+        solochatUpload.fields([
+            {
+                name: "attachments",
+                maxCount: MAX_SOLOCHAT_ATTACHMENTS,
+            },
+            {
+                name: "attachments[]",
+                maxCount: MAX_SOLOCHAT_ATTACHMENTS,
+            },
+        ])(req, res, (error) => {
+            if (!error) {
+                resolve();
+                return;
+            }
+
+            if (error instanceof multer.MulterError) {
+                if (error.code === "LIMIT_FILE_SIZE") {
+                    reject(badRequest("Each attachment must be 20MB or smaller"));
+                    return;
+                }
+
+                if (error.code === "LIMIT_FILE_COUNT") {
+                    reject(
+                        badRequest(
+                            `attachments must contain ${MAX_SOLOCHAT_ATTACHMENTS} files or fewer`,
+                        ),
+                    );
+                    return;
+                }
+
+                if (error.code === "LIMIT_UNEXPECTED_FILE") {
+                    reject(
+                        badRequest(
+                            'attachments must be uploaded under the "attachments" field',
+                        ),
+                    );
+                    return;
+                }
+
+                reject(badRequest("Attachment upload failed"));
+                return;
+            }
+
+            reject(error);
+        });
+    });
 }
 
 function sanitizeConversation(conversation) {
@@ -298,15 +367,37 @@ function createSoloChatRouter(db) {
         "/conversations/:conversationId/messages/stream",
         async (req, res, next) => {
             let streamStarted = false;
+            let userMessage = null;
             let assistantMessage = null;
             let assistantContentBuffer = "";
+            let createdAttachments = [];
+            let userMessageStored = false;
+            let streamAbortController = null;
+            let streamAbortedByClient = false;
+
+            const abortStream = () => {
+                streamAbortedByClient = true;
+
+                if (streamAbortController && !streamAbortController.signal.aborted) {
+                    streamAbortController.abort();
+                }
+            };
+
+            const handleResponseClose = () => {
+                if (!res.writableEnded) {
+                    abortStream();
+                }
+            };
 
             try {
                 const userId = requireUserId(req);
                 const conversationId = parseConversationId(
                     req.params.conversationId,
                 );
-                const { content, attachmentIds } = parseMessageInput(req.body);
+
+                await parseSoloChatUpload(req, res);
+
+                const { content, uploadedFiles } = parseStreamMessageInput(req);
                 const conversation =
                     await conversationService.getConversationForUser({
                         conversationId,
@@ -317,39 +408,41 @@ function createSoloChatRouter(db) {
                     throw notFound("Conversation not found");
                 }
 
-                for (const attachmentId of attachmentIds) {
-                    const attachment = await fileService.getFileForOwner({
-                        fileId: attachmentId,
-                        userId,
-                    });
-
-                    if (
-                        !attachment ||
-                        attachment.purpose !== FILE_PURPOSES.SOLOCHAT ||
-                        !["image", "document"].includes(attachment.kind)
-                    ) {
-                        throw badRequest(
-                            "attachmentIds contain an invalid or unsupported attachment",
-                        );
-                    }
-                }
+                streamAbortController = new AbortController();
+                req.on("aborted", abortStream);
+                res.on("close", handleResponseClose);
 
                 await withImmediateTransaction(async (txDb) => {
                     const txConversationService =
                         createSoloChatConversationService(txDb);
                     const txFileService = createFileService(txDb);
-                    const userMessage =
-                        await txConversationService.createMessage({
+                    userMessage = await txConversationService.createMessage({
                             conversationId,
                             role: "user",
                             content,
                             status: "completed",
                         });
 
-                    if (attachmentIds.length) {
+                    if (uploadedFiles.length) {
+                        createdAttachments = [];
+
+                        for (const uploadedFile of uploadedFiles) {
+                            createdAttachments.push(
+                                await txFileService.processUpload({
+                                    userId,
+                                    file: uploadedFile,
+                                    purpose: FILE_PURPOSES.SOLOCHAT,
+                                }),
+                            );
+                        }
+                    }
+
+                    if (createdAttachments.length) {
                         await txFileService.attachFilesToSoloChatMessage({
                             messageId: userMessage.id,
-                            fileIds: attachmentIds,
+                            fileIds: createdAttachments.map(
+                                (attachment) => attachment.id,
+                            ),
                             userId,
                         });
                     }
@@ -358,6 +451,10 @@ function createSoloChatRouter(db) {
                         conversationId,
                     );
                 });
+                userMessageStored = true;
+                userMessage = await conversationService.getMessageById(
+                    userMessage.id,
+                );
 
                 const history =
                     await conversationService.listMessages(conversationId);
@@ -379,6 +476,11 @@ function createSoloChatRouter(db) {
                 streamStarted = true;
 
                 writeStreamEvent(res, {
+                    type: "user_input",
+                    message: sanitizeMessage(userMessage),
+                });
+
+                writeStreamEvent(res, {
                     type: "assistant_start",
                     message: sanitizeMessage(assistantMessage),
                 });
@@ -387,8 +489,15 @@ function createSoloChatRouter(db) {
                     await aiService.streamAssistantTurn({
                         conversation,
                         messages: history,
+                        signal: streamAbortController.signal,
                         onDelta(delta) {
                             assistantContentBuffer += delta;
+
+                            if (res.writableEnded || res.destroyed) {
+                                abortStream();
+                                return;
+                            }
+
                             writeStreamEvent(res, {
                                 type: "assistant_delta",
                                 messageId: assistantMessage.id,
@@ -405,26 +514,34 @@ function createSoloChatRouter(db) {
 
                 await conversationService.touchConversation(conversationId);
 
-                if (nextTitle) {
+                if (nextTitle && !streamAbortController.signal.aborted) {
                     const updatedConversation =
                         await conversationService.updateConversationTitle({
                             conversationId,
                             title: nextTitle,
                         });
 
+                    if (!res.writableEnded && !res.destroyed) {
+                        writeStreamEvent(res, {
+                            type: "conversation_title",
+                            conversation: sanitizeConversation(updatedConversation),
+                        });
+                    }
+                }
+
+                if (!res.writableEnded && !res.destroyed) {
                     writeStreamEvent(res, {
-                        type: "conversation_title",
-                        conversation: sanitizeConversation(updatedConversation),
+                        type: "assistant_done",
+                        message: sanitizeMessage(assistantMessage),
                     });
                 }
 
-                writeStreamEvent(res, {
-                    type: "assistant_done",
-                    message: sanitizeMessage(assistantMessage),
-                });
-
                 return res.end();
             } catch (error) {
+                if (!streamStarted && !userMessageStored && createdAttachments.length) {
+                    await deleteStoredAttachments(createdAttachments);
+                }
+
                 if (streamStarted) {
                     if (assistantMessage) {
                         assistantMessage =
@@ -435,17 +552,31 @@ function createSoloChatRouter(db) {
                             });
                     }
 
-                    writeStreamEvent(res, {
-                        type: "assistant_error",
-                        message: error.message || "AI stream failed",
-                        assistantMessage: assistantMessage
-                            ? sanitizeMessage(assistantMessage)
-                            : null,
-                    });
-                    return res.end();
+                    if (!streamAbortedByClient && !res.writableEnded && !res.destroyed) {
+                        writeStreamEvent(res, {
+                            type: "assistant_error",
+                            message: error.message || "AI stream failed",
+                            assistantMessage: assistantMessage
+                                ? sanitizeMessage(assistantMessage)
+                                : null,
+                        });
+                    }
+
+                    if (!res.writableEnded && !res.destroyed) {
+                        return res.end();
+                    }
+
+                    return undefined;
+                }
+
+                if (error?.code === "CLIENT_ABORTED") {
+                    return res.status(499).end();
                 }
 
                 return next(error);
+            } finally {
+                req.off("aborted", abortStream);
+                res.off("close", handleResponseClose);
             }
         },
     );

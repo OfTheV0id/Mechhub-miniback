@@ -7,6 +7,11 @@ const {
 } = require("../services/uploads/file-service");
 const { sanitizeFileAsset } = require("../lib/assignments");
 
+const PUBLIC_UPLOAD_PURPOSES = new Set([
+    FILE_PURPOSES.ASSIGNMENT_ATTACHMENT,
+    FILE_PURPOSES.SUBMISSION_ATTACHMENT,
+]);
+
 const upload = multer({
     storage: multer.memoryStorage(),
     limits: {
@@ -53,9 +58,9 @@ function parseFileId(value) {
 }
 
 function parsePurpose(value) {
-    if (!Object.values(FILE_PURPOSES).includes(value)) {
+    if (!PUBLIC_UPLOAD_PURPOSES.has(value)) {
         throw badRequest(
-            "purpose must be assignment_attachment, submission_attachment, or solochat",
+            "purpose must be assignment_attachment or submission_attachment",
         );
     }
 

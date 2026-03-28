@@ -13,10 +13,13 @@ function createOpenAiCompatibleClient() {
         temperature = 0.7,
         model,
         maxTokens,
+        signal: requestSignal,
     }) {
         const resolvedModel = validateConfig(model);
         const chatCompletionsUrl = resolveChatCompletionsUrl(baseUrl);
-        const controller = new AbortController();
+        const { controller, detach } = createLinkedAbortController(
+            requestSignal,
+        );
         const timeout = startAbortTimer(controller, timeoutMs);
 
         try {
@@ -58,13 +61,16 @@ function createOpenAiCompatibleClient() {
 
             return content;
         } catch (error) {
-            if (error.name === "AbortError") {
-                throw timeoutError();
+            if (isAbortError(error)) {
+                throw requestSignal?.aborted
+                    ? requestAbortedError()
+                    : timeoutError();
             }
 
             throw error;
         } finally {
             clearAbortTimer(timeout);
+            detach();
         }
     }
 
@@ -72,10 +78,13 @@ function createOpenAiCompatibleClient() {
         messages,
         temperature = 0.7,
         model,
+        signal: requestSignal,
     }) {
         const resolvedModel = validateConfig(model);
         const chatCompletionsUrl = resolveChatCompletionsUrl(baseUrl);
-        const controller = new AbortController();
+        const { controller, detach } = createLinkedAbortController(
+            requestSignal,
+        );
         let timeout = startAbortTimer(controller, streamTimeoutMs);
 
         try {
@@ -172,13 +181,16 @@ function createOpenAiCompatibleClient() {
                 }
             }
         } catch (error) {
-            if (error.name === "AbortError") {
-                throw timeoutError();
+            if (isAbortError(error)) {
+                throw requestSignal?.aborted
+                    ? requestAbortedError()
+                    : timeoutError();
             }
 
             throw error;
         } finally {
             clearAbortTimer(timeout);
+            detach();
         }
     }
 
@@ -270,6 +282,43 @@ function startAbortTimer(controller, timeoutMs) {
     return setTimeout(() => controller.abort(), timeoutMs);
 }
 
+function createLinkedAbortController(externalSignal) {
+    const controller = new AbortController();
+
+    if (!externalSignal) {
+        return {
+            controller,
+            detach() {},
+        };
+    }
+
+    const abortFromExternalSignal = () => {
+        controller.abort(externalSignal.reason);
+    };
+
+    if (externalSignal.aborted) {
+        abortFromExternalSignal();
+    } else {
+        externalSignal.addEventListener("abort", abortFromExternalSignal, {
+            once: true,
+        });
+    }
+
+    return {
+        controller,
+        detach() {
+            externalSignal.removeEventListener(
+                "abort",
+                abortFromExternalSignal,
+            );
+        },
+    };
+}
+
+function isAbortError(error) {
+    return error?.name === "AbortError" || error?.code === "ABORT_ERR";
+}
+
 function clearAbortTimer(timeout) {
     if (timeout) {
         clearTimeout(timeout);
@@ -299,6 +348,14 @@ function timeoutError() {
     const error = new Error("AI request timed out");
     error.statusCode = 504;
     error.expose = true;
+    return error;
+}
+
+function requestAbortedError() {
+    const error = new Error("AI request aborted by client");
+    error.statusCode = 499;
+    error.expose = true;
+    error.code = "CLIENT_ABORTED";
     return error;
 }
 

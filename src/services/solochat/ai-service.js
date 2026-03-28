@@ -4,7 +4,12 @@ function createSoloChatAiService(options = {}) {
     const client = options.client || createOpenAiCompatibleClient();
     const attachmentService = options.attachmentService || null;
 
-    async function streamAssistantTurn({ conversation, messages, onDelta }) {
+    async function streamAssistantTurn({
+        conversation,
+        messages,
+        onDelta,
+        signal,
+    }) {
         let assistantContent = "";
         const replyMessages = await buildReplyMessages(
             messages,
@@ -14,6 +19,7 @@ function createSoloChatAiService(options = {}) {
         for await (const delta of client.streamChatCompletion({
             messages: replyMessages,
             temperature: 0.6,
+            signal,
         })) {
             assistantContent += delta;
 
@@ -24,6 +30,13 @@ function createSoloChatAiService(options = {}) {
 
         let nextTitle = null;
 
+        if (signal?.aborted) {
+            return {
+                assistantContent: assistantContent.trim(),
+                nextTitle,
+            };
+        }
+
         if (conversation.title === "New Chat") {
             try {
                 nextTitle = normalizeTitle(
@@ -31,6 +44,7 @@ function createSoloChatAiService(options = {}) {
                         messages: buildTitleMessages(messages),
                         temperature: 0.2,
                         maxTokens: 24,
+                        signal,
                     }),
                 );
             } catch (error) {
