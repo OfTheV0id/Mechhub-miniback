@@ -160,7 +160,7 @@ function createSoloChatConversationService(db) {
         const messageIds = messages.map((message) => message.id);
         const placeholders = messageIds.map(() => "?").join(", ");
         const attachments = await db.all(
-            `SELECT uf.id, uf.owner_user_id, smf.message_id, uf.storage_path, uf.file_name, uf.mime_type, uf.size_bytes, uf.width, uf.height, uf.kind, uf.purpose, uf.created_at
+            `SELECT uf.id, uf.owner_user_id, smf.message_id, uf.storage_path, uf.file_name, uf.mime_type, uf.size_bytes, uf.width, uf.height, uf.kind, uf.created_at
              FROM solochat_message_files smf
              INNER JOIN uploaded_files uf
                  ON uf.id = smf.file_id

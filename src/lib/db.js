@@ -1,4 +1,5 @@
 const fs = require("node:fs");
+const fsPromises = require("node:fs/promises");
 const path = require("node:path");
 const sqlite3 = require("sqlite3");
 const { open } = require("sqlite");
@@ -6,6 +7,13 @@ const { SQLITE_NOW_ISO_EXPRESSION } = require("./time");
 
 let dbPromise;
 const SQLITE_BUSY_TIMEOUT_MS = 5000;
+const LEGACY_ASSIGNMENT_TABLES = [
+    "assignment_files",
+    "submission_files",
+    "submission_reviews",
+    "assignment_submissions",
+    "assignments",
+];
 
 function resolveDbPath() {
     const configuredPath = process.env.DB_PATH || "./data/app.sqlite";
@@ -56,7 +64,7 @@ async function prepareDb(db) {
     await ensureUserProfileColumns(db);
     await ensureSoloChatTables(db);
     await ensureClassTables(db);
-    await ensureAssignmentTables(db);
+    await migrateLegacyAssignmentAndUploadTables(db);
     await ensureUploadTables(db);
 }
 
@@ -209,355 +217,161 @@ async function ensureClassTables(db) {
     `);
 }
 
-async function ensureAssignmentTables(db) {
-    await ensureAssignmentsTableDefinition(db);
-    await ensureAssignmentSubmissionsTableDefinition(db);
-    await ensureSubmissionReviewsTableDefinition(db);
+async function migrateLegacyAssignmentAndUploadTables(db) {
+    const uploadedFilesSourceTable = await resolveSourceTableName(
+        db,
+        "uploaded_files",
+    );
+    const solochatBindingsSourceTable = await resolveSourceTableName(
+        db,
+        "solochat_message_files",
+    );
+    const hasUploadedFilesOldTable = await tableExists(db, "uploaded_files_old");
+    const hasSoloChatBindingsOldTable = await tableExists(
+        db,
+        "solochat_message_files_old",
+    );
+    const legacyTables = await listExistingTables(db, LEGACY_ASSIGNMENT_TABLES);
+    const uploadedFilesColumns = uploadedFilesSourceTable
+        ? await getTableColumns(db, uploadedFilesSourceTable)
+        : [];
+    const uploadedFilesColumnNames = new Set(
+        uploadedFilesColumns.map((column) => column.name),
+    );
+    const needsUploadMigration =
+        Boolean(uploadedFilesSourceTable) &&
+        (hasUploadedFilesOldTable ||
+            hasSoloChatBindingsOldTable ||
+            uploadedFilesSourceTable !== "uploaded_files" ||
+            solochatBindingsSourceTable === "solochat_message_files_old" ||
+            uploadedFilesColumnNames.has("purpose") ||
+            legacyTables.length > 0);
 
-    await db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_assignments_class_created
-        ON assignments(class_id, created_at DESC, id DESC)
-    `);
+    if (!needsUploadMigration) {
+        if (!uploadedFilesSourceTable && legacyTables.length) {
+            await dropTablesWithForeignKeysDisabled(db, legacyTables);
+        }
 
-    await db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_assignments_class_status_due
-        ON assignments(class_id, status, due_at, id)
-    `);
+        return;
+    }
 
-    await db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_assignments_creator
-        ON assignments(created_by_user_id, created_at DESC, id DESC)
-    `);
+    const retainedFiles =
+        uploadedFilesSourceTable && solochatBindingsSourceTable
+            ? await db.all(
+                  `SELECT DISTINCT uf.id, uf.owner_user_id, uf.storage_path, uf.file_name, uf.mime_type, uf.size_bytes, uf.width, uf.height, uf.kind, uf.created_at
+                   FROM ${uploadedFilesSourceTable} uf
+                   INNER JOIN ${solochatBindingsSourceTable} smf
+                       ON smf.file_id = uf.id
+                   ORDER BY uf.id ASC`,
+              )
+            : [];
+    const retainedFileIds = retainedFiles.map((file) => file.id);
+    const retainedFileIdSet = new Set(retainedFileIds);
+    const allUploadedFiles = uploadedFilesSourceTable
+        ? await db.all(
+              `SELECT id, storage_path
+               FROM ${uploadedFilesSourceTable}`,
+          )
+        : [];
+    const filesToDelete = allUploadedFiles.filter(
+        (file) => !retainedFileIdSet.has(file.id),
+    );
+    const retainedBindings =
+        retainedFileIds.length && solochatBindingsSourceTable
+            ? await db.all(
+                  `SELECT message_id, file_id
+                   FROM ${solochatBindingsSourceTable}
+                   WHERE file_id IN (${retainedFileIds.map(() => "?").join(", ")})
+                   ORDER BY message_id ASC, file_id ASC`,
+                  ...retainedFileIds,
+              )
+            : [];
 
-    await db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_assignment_submissions_assignment_student
-        ON assignment_submissions(assignment_id, student_user_id)
-    `);
-
-    await db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_assignment_submissions_student_updated
-        ON assignment_submissions(student_user_id, updated_at DESC, id DESC)
-    `);
-
-    await db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_submission_reviews_submission
-        ON submission_reviews(submission_id)
-    `);
+    await rebuildUploadTables(db, {
+        retainedFiles: retainedFiles.map((file) => ({
+            ...file,
+            kind: normalizeUploadedFileKind(file.kind),
+        })),
+        retainedBindings,
+        dropTableNames: [
+            ...LEGACY_ASSIGNMENT_TABLES,
+            "uploaded_files",
+            "uploaded_files_old",
+            "solochat_message_files",
+            "solochat_message_files_old",
+        ],
+    });
+    await deleteStoredFilesBestEffort(filesToDelete);
 }
 
-async function ensureAssignmentsTableDefinition(db) {
-    const columns = await getTableColumns(db, "assignments");
-    const columnNames = new Set(columns.map((column) => column.name));
+async function rebuildUploadTables(
+    db,
+    { retainedFiles, retainedBindings, dropTableNames },
+) {
+    await db.exec("PRAGMA foreign_keys = OFF");
 
-    if (!columns.length) {
-        await db.exec(`
-            CREATE TABLE assignments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                class_id INTEGER NOT NULL,
-                created_by_user_id INTEGER NOT NULL,
-                title TEXT NOT NULL,
-                description TEXT NOT NULL DEFAULT '',
-                start_at TEXT DEFAULT NULL,
-                due_at TEXT DEFAULT NULL,
-                allow_late_submission INTEGER NOT NULL DEFAULT 0 CHECK (allow_late_submission IN (0, 1)),
-                max_score REAL NOT NULL DEFAULT 100,
-                status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'closed', 'archived')),
-                published_at TEXT DEFAULT NULL,
-                closed_at TEXT DEFAULT NULL,
-                created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
-                updated_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
-                FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE CASCADE,
-                FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+    try {
+        await dropTables(db, dropTableNames);
+        await createUploadedFilesTable(db);
+        await createSoloChatMessageFilesTable(db);
+
+        for (const file of retainedFiles) {
+            await db.run(
+                `INSERT INTO uploaded_files (
+                     id,
+                     owner_user_id,
+                     storage_path,
+                     file_name,
+                     mime_type,
+                     size_bytes,
+                     width,
+                     height,
+                     kind,
+                     created_at
+                 )
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                file.id,
+                file.owner_user_id,
+                file.storage_path,
+                file.file_name,
+                file.mime_type,
+                file.size_bytes,
+                file.width ?? null,
+                file.height ?? null,
+                file.kind,
+                file.created_at || new Date().toISOString(),
             );
-        `);
-        return;
-    }
+        }
 
-    const requiredColumns = [
-        "created_by_user_id",
-        "start_at",
-        "allow_late_submission",
-        "max_score",
-        "published_at",
-        "closed_at",
-    ];
-
-    if (requiredColumns.every((columnName) => columnNames.has(columnName))) {
-        return;
-    }
-
-    const createdByExpression = columnNames.has("created_by_user_id")
-        ? "created_by_user_id"
-        : columnNames.has("creator_user_id")
-          ? "creator_user_id"
-          : "(SELECT owner_user_id FROM classes WHERE id = assignments_old.class_id)";
-    const startAtExpression = columnNames.has("start_at") ? "start_at" : "NULL";
-    const dueAtExpression = columnNames.has("due_at") ? "due_at" : "NULL";
-    const allowLateExpression = columnNames.has("allow_late_submission")
-        ? "allow_late_submission"
-        : "0";
-    const maxScoreExpression = columnNames.has("max_score")
-        ? "max_score"
-        : "100";
-    const statusExpression = columnNames.has("status") ? "status" : "'draft'";
-    const publishedAtExpression = columnNames.has("published_at")
-        ? "published_at"
-        : columnNames.has("status")
-          ? `CASE WHEN status = 'published' THEN created_at ELSE NULL END`
-          : "NULL";
-    const closedAtExpression = columnNames.has("closed_at")
-        ? "closed_at"
-        : columnNames.has("deleted_at")
-          ? "deleted_at"
-          : "NULL";
-    const createdAtExpression = columnNames.has("created_at")
-        ? "created_at"
-        : SQLITE_NOW_ISO_EXPRESSION;
-    const updatedAtExpression = columnNames.has("updated_at")
-        ? "updated_at"
-        : createdAtExpression;
-
-    await db.exec(`ALTER TABLE assignments RENAME TO assignments_old`);
-    await db.exec(`
-        CREATE TABLE assignments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            class_id INTEGER NOT NULL,
-            created_by_user_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            description TEXT NOT NULL DEFAULT '',
-            start_at TEXT DEFAULT NULL,
-            due_at TEXT DEFAULT NULL,
-            allow_late_submission INTEGER NOT NULL DEFAULT 0 CHECK (allow_late_submission IN (0, 1)),
-            max_score REAL NOT NULL DEFAULT 100,
-            status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'closed', 'archived')),
-            published_at TEXT DEFAULT NULL,
-            closed_at TEXT DEFAULT NULL,
-            created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
-            updated_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
-            FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE CASCADE,
-            FOREIGN KEY (created_by_user_id) REFERENCES users(id)
-        );
-    `);
-    await db.exec(`
-        INSERT INTO assignments (
-            id,
-            class_id,
-            created_by_user_id,
-            title,
-            description,
-            start_at,
-            due_at,
-            allow_late_submission,
-            max_score,
-            status,
-            published_at,
-            closed_at,
-            created_at,
-            updated_at
-        )
-        SELECT
-            id,
-            class_id,
-            ${createdByExpression},
-            title,
-            description,
-            ${startAtExpression},
-            ${dueAtExpression},
-            ${allowLateExpression},
-            ${maxScoreExpression},
-            ${statusExpression},
-            ${publishedAtExpression},
-            ${closedAtExpression},
-            ${createdAtExpression},
-            ${updatedAtExpression}
-        FROM assignments_old
-    `);
-    await db.exec(`DROP TABLE assignments_old`);
-}
-
-async function ensureAssignmentSubmissionsTableDefinition(db) {
-    const columns = await getTableColumns(db, "assignment_submissions");
-    const columnNames = new Set(columns.map((column) => column.name));
-
-    if (!columns.length) {
-        await db.exec(`
-            CREATE TABLE assignment_submissions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                assignment_id INTEGER NOT NULL,
-                student_user_id INTEGER NOT NULL,
-                text_answer TEXT NOT NULL DEFAULT '',
-                status TEXT NOT NULL CHECK (status IN ('draft', 'submitted')),
-                submitted_at TEXT DEFAULT NULL,
-                created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
-                updated_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
-                UNIQUE (assignment_id, student_user_id),
-                FOREIGN KEY (assignment_id) REFERENCES assignments(id) ON DELETE CASCADE,
-                FOREIGN KEY (student_user_id) REFERENCES users(id)
+        for (const binding of retainedBindings) {
+            await db.run(
+                `INSERT INTO solochat_message_files (message_id, file_id)
+                 VALUES (?, ?)`,
+                binding.message_id,
+                binding.file_id,
             );
-        `);
-        return;
+        }
+    } finally {
+        await db.exec("PRAGMA foreign_keys = ON");
     }
-
-    const requiredColumns = ["text_answer", "status", "created_at"];
-
-    if (requiredColumns.every((columnName) => columnNames.has(columnName))) {
-        return;
-    }
-
-    const textAnswerExpression = columnNames.has("text_answer")
-        ? "text_answer"
-        : columnNames.has("text_content")
-          ? "text_content"
-          : "''";
-    const statusExpression = columnNames.has("status")
-        ? "status"
-        : "'submitted'";
-    const submittedAtExpression = columnNames.has("submitted_at")
-        ? "submitted_at"
-        : "NULL";
-    const createdAtExpression = columnNames.has("created_at")
-        ? "created_at"
-        : columnNames.has("submitted_at")
-          ? "submitted_at"
-          : SQLITE_NOW_ISO_EXPRESSION;
-    const updatedAtExpression = columnNames.has("updated_at")
-        ? "updated_at"
-        : createdAtExpression;
-
-    await db.exec(
-        `ALTER TABLE assignment_submissions RENAME TO assignment_submissions_old`,
-    );
-    await db.exec(`
-        CREATE TABLE assignment_submissions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            assignment_id INTEGER NOT NULL,
-            student_user_id INTEGER NOT NULL,
-            text_answer TEXT NOT NULL DEFAULT '',
-            status TEXT NOT NULL CHECK (status IN ('draft', 'submitted')),
-            submitted_at TEXT DEFAULT NULL,
-            created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
-            updated_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
-            UNIQUE (assignment_id, student_user_id),
-            FOREIGN KEY (assignment_id) REFERENCES assignments(id) ON DELETE CASCADE,
-            FOREIGN KEY (student_user_id) REFERENCES users(id)
-        );
-    `);
-    await db.exec(`
-        INSERT INTO assignment_submissions (
-            id,
-            assignment_id,
-            student_user_id,
-            text_answer,
-            status,
-            submitted_at,
-            created_at,
-            updated_at
-        )
-        SELECT
-            id,
-            assignment_id,
-            student_user_id,
-            ${textAnswerExpression},
-            ${statusExpression},
-            ${submittedAtExpression},
-            ${createdAtExpression},
-            ${updatedAtExpression}
-        FROM assignment_submissions_old
-    `);
-    await db.exec(`DROP TABLE assignment_submissions_old`);
-}
-
-async function ensureSubmissionReviewsTableDefinition(db) {
-    const columns = await getTableColumns(db, "submission_reviews");
-
-    if (!columns.length) {
-        await db.exec(`
-            CREATE TABLE submission_reviews (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                submission_id INTEGER NOT NULL UNIQUE,
-                reviewer_user_id INTEGER NOT NULL,
-                score REAL NOT NULL,
-                comment TEXT NOT NULL DEFAULT '',
-                reviewed_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
-                updated_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
-                FOREIGN KEY (submission_id) REFERENCES assignment_submissions(id) ON DELETE CASCADE,
-                FOREIGN KEY (reviewer_user_id) REFERENCES users(id)
-            );
-        `);
-        return;
-    }
-
-    const columnNames = new Set(columns.map((column) => column.name));
-    const requiredColumns = [
-        "submission_id",
-        "reviewer_user_id",
-        "score",
-        "comment",
-        "reviewed_at",
-        "updated_at",
-    ];
-    const foreignKeys = await db.all(
-        `PRAGMA foreign_key_list(submission_reviews)`,
-    );
-    const submissionForeignKey = foreignKeys.find(
-        (foreignKey) => foreignKey.from === "submission_id",
-    );
-    const reviewerForeignKey = foreignKeys.find(
-        (foreignKey) => foreignKey.from === "reviewer_user_id",
-    );
-    const hasExpectedForeignKeys =
-        submissionForeignKey?.table === "assignment_submissions" &&
-        submissionForeignKey?.to === "id" &&
-        reviewerForeignKey?.table === "users" &&
-        reviewerForeignKey?.to === "id";
-
-    if (
-        requiredColumns.every((columnName) => columnNames.has(columnName)) &&
-        hasExpectedForeignKeys
-    ) {
-        return;
-    }
-
-    await db.exec(
-        `ALTER TABLE submission_reviews RENAME TO submission_reviews_old`,
-    );
-    await db.exec(`
-        CREATE TABLE submission_reviews (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            submission_id INTEGER NOT NULL UNIQUE,
-            reviewer_user_id INTEGER NOT NULL,
-            score REAL NOT NULL,
-            comment TEXT NOT NULL DEFAULT '',
-            reviewed_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
-            updated_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
-            FOREIGN KEY (submission_id) REFERENCES assignment_submissions(id) ON DELETE CASCADE,
-            FOREIGN KEY (reviewer_user_id) REFERENCES users(id)
-        );
-    `);
-    await db.exec(`
-        INSERT INTO submission_reviews (
-            id,
-            submission_id,
-            reviewer_user_id,
-            score,
-            comment,
-            reviewed_at,
-            updated_at
-        )
-        SELECT
-            id,
-            submission_id,
-            reviewer_user_id,
-            score,
-            comment,
-            reviewed_at,
-            updated_at
-        FROM submission_reviews_old
-    `);
-    await db.exec(`DROP TABLE submission_reviews_old`);
 }
 
 async function ensureUploadTables(db) {
+    await createUploadedFilesTable(db);
+    await createSoloChatMessageFilesTable(db);
+
+    await db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_uploaded_files_owner_created
+        ON uploaded_files(owner_user_id, created_at DESC, id DESC)
+    `);
+
+    await db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_solochat_message_files_message
+        ON solochat_message_files(message_id, file_id)
+    `);
+}
+
+async function createUploadedFilesTable(db) {
     await db.exec(`
         CREATE TABLE IF NOT EXISTS uploaded_files (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -568,33 +382,14 @@ async function ensureUploadTables(db) {
             size_bytes INTEGER NOT NULL,
             width INTEGER DEFAULT NULL,
             height INTEGER DEFAULT NULL,
-            kind TEXT NOT NULL CHECK (kind IN ('image', 'document', 'file')),
-            purpose TEXT NOT NULL CHECK (purpose IN ('assignment_attachment', 'submission_attachment', 'solochat')),
+            kind TEXT NOT NULL CHECK (kind IN ('image', 'text')),
             created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
             FOREIGN KEY (owner_user_id) REFERENCES users(id)
         );
     `);
+}
 
-    await db.exec(`
-        CREATE TABLE IF NOT EXISTS assignment_files (
-            assignment_id INTEGER NOT NULL,
-            file_id INTEGER NOT NULL UNIQUE,
-            PRIMARY KEY (assignment_id, file_id),
-            FOREIGN KEY (assignment_id) REFERENCES assignments(id) ON DELETE CASCADE,
-            FOREIGN KEY (file_id) REFERENCES uploaded_files(id) ON DELETE CASCADE
-        );
-    `);
-
-    await db.exec(`
-        CREATE TABLE IF NOT EXISTS submission_files (
-            submission_id INTEGER NOT NULL,
-            file_id INTEGER NOT NULL UNIQUE,
-            PRIMARY KEY (submission_id, file_id),
-            FOREIGN KEY (submission_id) REFERENCES assignment_submissions(id) ON DELETE CASCADE,
-            FOREIGN KEY (file_id) REFERENCES uploaded_files(id) ON DELETE CASCADE
-        );
-    `);
-
+async function createSoloChatMessageFilesTable(db) {
     await db.exec(`
         CREATE TABLE IF NOT EXISTS solochat_message_files (
             message_id INTEGER NOT NULL,
@@ -604,26 +399,78 @@ async function ensureUploadTables(db) {
             FOREIGN KEY (file_id) REFERENCES uploaded_files(id) ON DELETE CASCADE
         );
     `);
+}
 
-    await db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_uploaded_files_owner_created
-        ON uploaded_files(owner_user_id, created_at DESC, id DESC)
-    `);
+async function resolveSourceTableName(db, tableName) {
+    if (await tableExists(db, tableName)) {
+        return tableName;
+    }
 
-    await db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_assignment_files_assignment
-        ON assignment_files(assignment_id, file_id)
-    `);
+    const oldTableName = `${tableName}_old`;
+    return (await tableExists(db, oldTableName)) ? oldTableName : null;
+}
 
-    await db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_submission_files_submission
-        ON submission_files(submission_id, file_id)
-    `);
+async function listExistingTables(db, tableNames) {
+    const existing = [];
 
-    await db.exec(`
-        CREATE INDEX IF NOT EXISTS idx_solochat_message_files_message
-        ON solochat_message_files(message_id, file_id)
-    `);
+    for (const tableName of tableNames) {
+        if (await tableExists(db, tableName)) {
+            existing.push(tableName);
+        }
+    }
+
+    return existing;
+}
+
+async function dropTablesWithForeignKeysDisabled(db, tableNames) {
+    await db.exec("PRAGMA foreign_keys = OFF");
+
+    try {
+        await dropTables(db, tableNames);
+    } finally {
+        await db.exec("PRAGMA foreign_keys = ON");
+    }
+}
+
+async function dropTables(db, tableNames) {
+    for (const tableName of tableNames) {
+        await db.exec(`DROP TABLE IF EXISTS ${tableName}`);
+    }
+}
+
+function normalizeUploadedFileKind(kind) {
+    return kind === "image" ? "image" : "text";
+}
+
+async function deleteStoredFilesBestEffort(files) {
+    for (const file of files) {
+        if (!file?.storage_path) {
+            continue;
+        }
+
+        try {
+            await fsPromises.unlink(file.storage_path);
+        } catch (error) {
+            if (error?.code !== "ENOENT") {
+                console.warn(
+                    "Failed to delete stored file",
+                    file.storage_path,
+                    error,
+                );
+            }
+        }
+    }
+}
+
+async function tableExists(db, tableName) {
+    const row = await db.get(
+        `SELECT name
+         FROM sqlite_master
+         WHERE type = 'table' AND name = ?`,
+        tableName,
+    );
+
+    return Boolean(row);
 }
 
 async function getTableColumns(db, tableName) {

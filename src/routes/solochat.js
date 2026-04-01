@@ -9,12 +9,15 @@ const {
 const { createSoloChatAiService } = require("../services/solochat/ai-service");
 const {
     createFileService,
-    FILE_PURPOSES,
     MAX_UPLOAD_BYTES,
 } = require("../services/uploads/file-service");
+const {
+    buildSoloChatAttachmentUrl,
+} = require("../services/solochat/attachment-contract");
 
 const MAX_SOLOCHAT_ATTACHMENTS = 4;
 const solochatUpload = multer({
+    defParamCharset: "utf8",
     storage: multer.memoryStorage(),
     limits: {
         fileSize: MAX_UPLOAD_BYTES,
@@ -66,6 +69,16 @@ function parseConversationId(value) {
     return conversationId;
 }
 
+function parseAttachmentId(value) {
+    const attachmentId = Number(value);
+
+    if (!Number.isInteger(attachmentId) || attachmentId <= 0) {
+        throw badRequest("A valid attachmentId is required");
+    }
+
+    return attachmentId;
+}
+
 function parseTitle(value) {
     const title = String(value || "").trim();
 
@@ -80,15 +93,32 @@ function parseTitle(value) {
     return title;
 }
 
+function buildInlineContentDisposition(fileName) {
+    const normalizedFileName = String(fileName || "download")
+        .replace(/[\r\n]+/g, " ")
+        .trim();
+    const asciiFallback =
+        normalizedFileName.replace(/[^\x20-\x7E]+/g, "_") || "download";
+    const quotedFallback = asciiFallback
+        .replace(/\\/g, "\\\\")
+        .replace(/"/g, '\\"');
+
+    return `inline; filename="${quotedFallback}"; filename*=UTF-8''${encodeURIComponent(normalizedFileName)}`;
+}
+
 function parseStreamMessageInput(req) {
-    if (!req.is("multipart/form-data")) {
+    let body = req.body || {};
+    let uploadedFiles = [];
+
+    if (req.is("multipart/form-data")) {
+        uploadedFiles = normalizeMultipartFiles(req.files);
+    } else if (req.is("application/json")) {
+        body = req.body || {};
+    } else {
         throw unsupportedMediaType(
-            "Content-Type must be multipart/form-data",
+            "Content-Type must be application/json or multipart/form-data",
         );
     }
-
-    const body = req.body || {};
-    const uploadedFiles = normalizeMultipartFiles(req.files);
 
     if (
         body.content !== undefined &&
@@ -189,13 +219,16 @@ function sanitizeConversation(conversation) {
     };
 }
 
+function normalizeAttachmentKind(kind) {
+    return kind === "image" ? "image" : "text";
+}
+
 function sanitizeAttachment(attachment) {
     return {
         id: attachment.id,
-        kind: attachment.kind,
-        purpose: attachment.purpose,
+        kind: normalizeAttachmentKind(attachment.kind),
         fileName: attachment.file_name,
-        url: `/uploads/files/${attachment.id}`,
+        url: buildSoloChatAttachmentUrl(attachment.id),
         mimeType: attachment.mime_type,
         width: attachment.width ?? null,
         height: attachment.height ?? null,
@@ -214,6 +247,18 @@ function sanitizeMessage(message) {
         attachments: (message.attachments || []).map(sanitizeAttachment),
         createdAt: toIsoTimestamp(message.created_at),
         updatedAt: toIsoTimestamp(message.updated_at),
+    };
+}
+
+function sanitizeTextPreviewResponse(attachment, preview) {
+    return {
+        id: attachment.id,
+        fileName: attachment.file_name,
+        mimeType: attachment.mime_type,
+        sizeBytes: attachment.size_bytes,
+        textContent: preview.textContent,
+        truncated: preview.truncated,
+        maxChars: preview.maxChars,
     };
 }
 
@@ -268,6 +313,58 @@ function createSoloChatRouter(db) {
             return next(error);
         }
     });
+
+    router.get("/attachments/:attachmentId", async (req, res, next) => {
+        try {
+            const userId = requireUserId(req);
+            const attachmentId = parseAttachmentId(req.params.attachmentId);
+            const attachment = await fileService.getSoloChatFileForUser({
+                fileId: attachmentId,
+                userId,
+            });
+
+            if (!attachment) {
+                throw notFound("Attachment not found");
+            }
+
+            res.setHeader(
+                "Content-Disposition",
+                buildInlineContentDisposition(attachment.file_name),
+            );
+            return res.type(attachment.mime_type).sendFile(attachment.storage_path);
+        } catch (error) {
+            return next(error);
+        }
+    });
+
+    router.get(
+        "/attachments/:attachmentId/preview-text",
+        async (req, res, next) => {
+            try {
+                const userId = requireUserId(req);
+                const attachmentId = parseAttachmentId(req.params.attachmentId);
+                const attachment = await fileService.getSoloChatFileForUser({
+                    fileId: attachmentId,
+                    userId,
+                });
+
+                if (!attachment) {
+                    throw notFound("Attachment not found");
+                }
+
+                if (normalizeAttachmentKind(attachment.kind) !== "text") {
+                    throw badRequest("Attachment does not support text preview");
+                }
+
+                const preview = await fileService.readTextPreview(attachment);
+                return res.json(
+                    sanitizeTextPreviewResponse(attachment, preview),
+                );
+            } catch (error) {
+                return next(error);
+            }
+        },
+    );
 
     router.patch("/conversations/:conversationId", async (req, res, next) => {
         try {
@@ -395,7 +492,9 @@ function createSoloChatRouter(db) {
                     req.params.conversationId,
                 );
 
-                await parseSoloChatUpload(req, res);
+                if (req.is("multipart/form-data")) {
+                    await parseSoloChatUpload(req, res);
+                }
 
                 const { content, uploadedFiles } = parseStreamMessageInput(req);
                 const conversation =
@@ -431,7 +530,6 @@ function createSoloChatRouter(db) {
                                 await txFileService.processUpload({
                                     userId,
                                     file: uploadedFile,
-                                    purpose: FILE_PURPOSES.SOLOCHAT,
                                 }),
                             );
                         }
@@ -514,12 +612,15 @@ function createSoloChatRouter(db) {
 
                 await conversationService.touchConversation(conversationId);
 
-                if (nextTitle && !streamAbortController.signal.aborted) {
-                    const updatedConversation =
-                        await conversationService.updateConversationTitle({
-                            conversationId,
-                            title: nextTitle,
-                        });
+                if (!streamAbortController.signal.aborted) {
+                    const updatedConversation = nextTitle
+                        ? await conversationService.updateConversationTitle({
+                              conversationId,
+                              title: nextTitle,
+                          })
+                        : await conversationService.getConversationById(
+                              conversationId,
+                          );
 
                     if (!res.writableEnded && !res.destroyed) {
                         writeStreamEvent(res, {

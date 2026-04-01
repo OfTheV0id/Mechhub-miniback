@@ -2,23 +2,20 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const sharp = require("sharp");
-const { withImmediateTransaction } = require("../../lib/db");
 const { SQLITE_NOW_ISO_EXPRESSION } = require("../../lib/time");
+const {
+    SOLOCHAT_DOCUMENT_PREVIEW_MAX_CHARS,
+    isAllowedSoloChatDocument,
+    isSoloChatImageMimeType,
+} = require("../solochat/attachment-contract");
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 const MAX_IMAGE_PIXELS = 20_000_000;
 const MAX_IMAGE_EDGE = 2048;
 const WEBP_QUALITY = 80;
-const MAX_DOCUMENT_TEXT_CHARS = 24000;
 const FILE_KINDS = {
     IMAGE: "image",
-    DOCUMENT: "document",
-    FILE: "file",
-};
-const FILE_PURPOSES = {
-    ASSIGNMENT_ATTACHMENT: "assignment_attachment",
-    SUBMISSION_ATTACHMENT: "submission_attachment",
-    SOLOCHAT: "solochat",
+    TEXT: "text",
 };
 
 function badRequest(message) {
@@ -41,15 +38,10 @@ function createFileService(db, options = {}) {
         path.resolve(process.cwd(), "data", "uploads", "files");
     const nowExpression = SQLITE_NOW_ISO_EXPRESSION;
 
-    async function processUpload({ userId, file, purpose }) {
+    async function processUpload({ userId, file }) {
         validateUploadedFile(file);
-        validatePurpose(purpose);
 
-        const normalizedFile = await normalizeUploadForPurpose({
-            file,
-            purpose,
-        });
-
+        const normalizedFile = await normalizeSoloChatUpload(file);
         const safeFileName = sanitizeFileName(
             file.originalname || "upload.bin",
         );
@@ -58,7 +50,7 @@ function createFileService(db, options = {}) {
                 ? replaceFileExtension(safeFileName, ".webp")
                 : safeFileName;
         const relativePath = path.join(
-            purpose,
+            "solochat",
             String(userId),
             `${crypto.randomUUID()}-${storedFileName}`,
         );
@@ -79,7 +71,6 @@ function createFileService(db, options = {}) {
                 width: normalizedFile.width ?? null,
                 height: normalizedFile.height ?? null,
                 kind: normalizedFile.kind,
-                purpose,
             });
         } catch (error) {
             await deleteStoredFilesBestEffort([{ storage_path: absolutePath }]);
@@ -96,7 +87,6 @@ function createFileService(db, options = {}) {
         width,
         height,
         kind,
-        purpose,
     }) {
         const result = await db.run(
             `INSERT INTO uploaded_files (
@@ -108,10 +98,9 @@ function createFileService(db, options = {}) {
                  width,
                  height,
                  kind,
-                 purpose,
                  created_at
              )
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ${nowExpression})`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ${nowExpression})`,
             userId,
             storagePath,
             fileName,
@@ -120,7 +109,6 @@ function createFileService(db, options = {}) {
             width,
             height,
             kind,
-            purpose,
         );
 
         return getFileById(result.lastID);
@@ -128,18 +116,22 @@ function createFileService(db, options = {}) {
 
     async function getFileById(fileId) {
         return db.get(
-            `SELECT id, owner_user_id, storage_path, file_name, mime_type, size_bytes, width, height, kind, purpose, created_at
+            `SELECT id, owner_user_id, storage_path, file_name, mime_type, size_bytes, width, height, kind, created_at
              FROM uploaded_files
              WHERE id = ?`,
             fileId,
         );
     }
 
-    async function getFileForOwner({ fileId, userId }) {
+    async function getSoloChatFileForUser({ fileId, userId }) {
         return db.get(
-            `SELECT id, owner_user_id, storage_path, file_name, mime_type, size_bytes, width, height, kind, purpose, created_at
-             FROM uploaded_files
-             WHERE id = ? AND owner_user_id = ?`,
+            `SELECT uf.id, uf.owner_user_id, uf.storage_path, uf.file_name, uf.mime_type, uf.size_bytes, uf.width, uf.height, uf.kind, uf.created_at
+             FROM uploaded_files uf
+             INNER JOIN solochat_message_files smf ON smf.file_id = uf.id
+             INNER JOIN solochat_messages sm ON sm.id = smf.message_id
+             INNER JOIN solochat_conversations sc ON sc.id = sm.conversation_id
+             WHERE uf.id = ? AND sc.user_id = ?
+             LIMIT 1`,
             fileId,
             userId,
         );
@@ -154,40 +146,16 @@ function createFileService(db, options = {}) {
 
         const placeholders = normalizedIds.map(() => "?").join(", ");
         return db.all(
-            `SELECT id, owner_user_id, storage_path, file_name, mime_type, size_bytes, width, height, kind, purpose, created_at
+            `SELECT id, owner_user_id, storage_path, file_name, mime_type, size_bytes, width, height, kind, created_at
              FROM uploaded_files
              WHERE id IN (${placeholders})`,
             ...normalizedIds,
         );
     }
 
-    async function listFilesForAssignment(assignmentId) {
-        return db.all(
-            `SELECT uf.id, uf.owner_user_id, uf.storage_path, uf.file_name, uf.mime_type, uf.size_bytes, uf.width, uf.height, uf.kind, uf.purpose, uf.created_at
-             FROM assignment_files af
-             INNER JOIN uploaded_files uf
-                 ON uf.id = af.file_id
-             WHERE af.assignment_id = ?
-             ORDER BY uf.id ASC`,
-            assignmentId,
-        );
-    }
-
-    async function listFilesForSubmission(submissionId) {
-        return db.all(
-            `SELECT uf.id, uf.owner_user_id, uf.storage_path, uf.file_name, uf.mime_type, uf.size_bytes, uf.width, uf.height, uf.kind, uf.purpose, uf.created_at
-             FROM submission_files sf
-             INNER JOIN uploaded_files uf
-                 ON uf.id = sf.file_id
-             WHERE sf.submission_id = ?
-             ORDER BY uf.id ASC`,
-            submissionId,
-        );
-    }
-
     async function listFilesForSoloChatMessage(messageId) {
         return db.all(
-            `SELECT uf.id, uf.owner_user_id, uf.storage_path, uf.file_name, uf.mime_type, uf.size_bytes, uf.width, uf.height, uf.kind, uf.purpose, uf.created_at
+            `SELECT uf.id, uf.owner_user_id, uf.storage_path, uf.file_name, uf.mime_type, uf.size_bytes, uf.width, uf.height, uf.kind, uf.created_at
              FROM solochat_message_files smf
              INNER JOIN uploaded_files uf
                  ON uf.id = smf.file_id
@@ -199,7 +167,7 @@ function createFileService(db, options = {}) {
 
     async function listFilesForConversation(conversationId) {
         return db.all(
-            `SELECT uf.id, uf.owner_user_id, uf.storage_path, uf.file_name, uf.mime_type, uf.size_bytes, uf.width, uf.height, uf.kind, uf.purpose, uf.created_at
+            `SELECT uf.id, uf.owner_user_id, uf.storage_path, uf.file_name, uf.mime_type, uf.size_bytes, uf.width, uf.height, uf.kind, uf.created_at
              FROM solochat_message_files smf
              INNER JOIN solochat_messages sm ON sm.id = smf.message_id
              INNER JOIN uploaded_files uf ON uf.id = smf.file_id
@@ -209,77 +177,20 @@ function createFileService(db, options = {}) {
         );
     }
 
-    async function replaceAssignmentFiles({ assignmentId, fileIds, userId }) {
-        const normalizedIds = normalizeIds(fileIds);
-        const files = await ensureAttachableFiles({
-            fileIds: normalizedIds,
-            userId,
-            expectedPurpose: FILE_PURPOSES.ASSIGNMENT_ATTACHMENT,
-            targetType: "assignment",
-            targetId: assignmentId,
-        });
-
-        await db.run(
-            `DELETE FROM assignment_files WHERE assignment_id = ?`,
-            assignmentId,
-        );
-
-        for (const file of files) {
-            await db.run(
-                `INSERT INTO assignment_files (assignment_id, file_id)
-                 VALUES (?, ?)`,
-                assignmentId,
-                file.id,
-            );
-        }
-
-        return listFilesForAssignment(assignmentId);
-    }
-
-    async function replaceSubmissionFiles({ submissionId, fileIds, userId }) {
-        const normalizedIds = normalizeIds(fileIds);
-        const files = await ensureAttachableFiles({
-            fileIds: normalizedIds,
-            userId,
-            expectedPurpose: FILE_PURPOSES.SUBMISSION_ATTACHMENT,
-            targetType: "submission",
-            targetId: submissionId,
-        });
-
-        await db.run(
-            `DELETE FROM submission_files WHERE submission_id = ?`,
-            submissionId,
-        );
-
-        for (const file of files) {
-            await db.run(
-                `INSERT INTO submission_files (submission_id, file_id)
-                 VALUES (?, ?)`,
-                submissionId,
-                file.id,
-            );
-        }
-
-        return listFilesForSubmission(submissionId);
-    }
-
     async function attachFilesToSoloChatMessage({
         messageId,
         fileIds,
         userId,
     }) {
-        const normalizedIds = normalizeIds(fileIds);
-        const files = await ensureAttachableFiles({
-            fileIds: normalizedIds,
+        const files = await ensureSoloChatAttachableFiles({
+            fileIds,
+            messageId,
             userId,
-            expectedPurpose: [FILE_PURPOSES.SOLOCHAT],
-            targetType: "solochat_message",
-            targetId: messageId,
         });
 
         for (const file of files) {
             await db.run(
-                `INSERT INTO solochat_message_files (message_id, file_id)
+                `INSERT OR IGNORE INTO solochat_message_files (message_id, file_id)
                  VALUES (?, ?)`,
                 messageId,
                 file.id,
@@ -289,151 +200,25 @@ function createFileService(db, options = {}) {
         return listFilesForSoloChatMessage(messageId);
     }
 
-    async function deleteUnattachedFileForUser({ fileId, userId }) {
-        const deletedFile = await withImmediateTransaction(async (txDb) => {
-            const file = await txDb.get(
-                `SELECT id, owner_user_id, storage_path, file_name, mime_type, size_bytes, purpose, created_at
-                 FROM uploaded_files
-                 WHERE id = ? AND owner_user_id = ?`,
-                fileId,
-                userId,
-            );
-
-            if (!file) {
-                return null;
-            }
-
-            const assignmentBinding = await txDb.get(
-                `SELECT assignment_id FROM assignment_files WHERE file_id = ?`,
-                fileId,
-            );
-            const submissionBinding = await txDb.get(
-                `SELECT submission_id FROM submission_files WHERE file_id = ?`,
-                fileId,
-            );
-            const solochatBinding = await txDb.get(
-                `SELECT message_id FROM solochat_message_files WHERE file_id = ?`,
-                fileId,
-            );
-
-            if (assignmentBinding || submissionBinding || solochatBinding) {
-                throw conflict("Attached files cannot be deleted");
-            }
-
-            const result = await txDb.run(
-                `DELETE FROM uploaded_files WHERE id = ? AND owner_user_id = ?`,
-                fileId,
-                userId,
-            );
-
-            if (!result.changes) {
-                return null;
-            }
-
-            return file;
-        });
-
-        if (!deletedFile) {
-            return false;
-        }
-
-        await deleteStoredFilesBestEffort([deletedFile]);
-        return true;
-    }
-
-    async function canUserAccessFile({ fileId, userId }) {
-        const file = await getFileById(fileId);
-
-        if (!file) {
-            return null;
-        }
-
-        if (file.owner_user_id === userId) {
-            return file;
-        }
-
-        const assignmentBinding = await db.get(
-            `SELECT a.class_id
-             FROM assignment_files af
-             INNER JOIN assignments a ON a.id = af.assignment_id
-             WHERE af.file_id = ?`,
-            fileId,
-        );
-
-        if (assignmentBinding) {
-            const membership = await db.get(
-                `SELECT id FROM class_members WHERE class_id = ? AND user_id = ?`,
-                assignmentBinding.class_id,
-                userId,
-            );
-
-            if (membership) {
-                return file;
-            }
-        }
-
-        const submissionBinding = await db.get(
-            `SELECT s.student_user_id, a.class_id
-             FROM submission_files sf
-             INNER JOIN assignment_submissions s ON s.id = sf.submission_id
-             INNER JOIN assignments a ON a.id = s.assignment_id
-             WHERE sf.file_id = ?`,
-            fileId,
-        );
-
-        if (submissionBinding) {
-            if (submissionBinding.student_user_id === userId) {
-                return file;
-            }
-
-            const teacherMembership = await db.get(
-                `SELECT id
-                 FROM class_members
-                 WHERE class_id = ? AND user_id = ? AND role = 'teacher'`,
-                submissionBinding.class_id,
-                userId,
-            );
-
-            if (teacherMembership) {
-                return file;
-            }
-        }
-
-        const solochatBinding = await db.get(
-            `SELECT c.user_id
-             FROM solochat_message_files smf
-             INNER JOIN solochat_messages m ON m.id = smf.message_id
-             INNER JOIN solochat_conversations c ON c.id = m.conversation_id
-             WHERE smf.file_id = ?`,
-            fileId,
-        );
-
-        if (solochatBinding && solochatBinding.user_id === userId) {
-            return file;
-        }
-
-        return null;
-    }
-
-    async function ensureAttachableFiles({
+    async function ensureSoloChatAttachableFiles({
         fileIds,
+        messageId,
         userId,
-        expectedPurpose,
-        targetType,
-        targetId,
     }) {
-        if (!fileIds.length) {
+        const normalizedIds = normalizeIds(fileIds);
+
+        if (!normalizedIds.length) {
             return [];
         }
 
-        const files = await listFilesByIds(fileIds);
+        const files = await listFilesByIds(normalizedIds);
 
-        if (files.length !== fileIds.length) {
+        if (files.length !== normalizedIds.length) {
             throw badRequest("One or more attachmentIds are invalid");
         }
 
         const fileMap = new Map(files.map((file) => [file.id, file]));
-        const orderedFiles = fileIds.map((fileId) => fileMap.get(fileId));
+        const orderedFiles = normalizedIds.map((fileId) => fileMap.get(fileId));
 
         for (const file of orderedFiles) {
             if (file.owner_user_id !== userId) {
@@ -442,60 +227,12 @@ function createFileService(db, options = {}) {
                 );
             }
 
-            const allowedPurposes = Array.isArray(expectedPurpose)
-                ? expectedPurpose
-                : [expectedPurpose];
-
-            if (!allowedPurposes.includes(file.purpose)) {
-                throw badRequest(
-                    "One or more attachments use the wrong purpose",
-                );
-            }
-
-            const assignmentBinding = await db.get(
-                `SELECT assignment_id FROM assignment_files WHERE file_id = ?`,
-                file.id,
-            );
-            const submissionBinding = await db.get(
-                `SELECT submission_id FROM submission_files WHERE file_id = ?`,
-                file.id,
-            );
-            const solochatBinding = await db.get(
+            const existingBinding = await db.get(
                 `SELECT message_id FROM solochat_message_files WHERE file_id = ?`,
                 file.id,
             );
 
-            if (
-                assignmentBinding &&
-                !(
-                    targetType === "assignment" &&
-                    assignmentBinding.assignment_id === targetId
-                )
-            ) {
-                throw conflict(
-                    "One or more attachments are already attached elsewhere",
-                );
-            }
-
-            if (
-                submissionBinding &&
-                !(
-                    targetType === "submission" &&
-                    submissionBinding.submission_id === targetId
-                )
-            ) {
-                throw conflict(
-                    "One or more attachments are already attached elsewhere",
-                );
-            }
-
-            if (
-                solochatBinding &&
-                !(
-                    targetType === "solochat_message" &&
-                    solochatBinding.message_id === targetId
-                )
-            ) {
+            if (existingBinding && existingBinding.message_id !== messageId) {
                 throw conflict(
                     "One or more attachments are already attached elsewhere",
                 );
@@ -510,37 +247,40 @@ function createFileService(db, options = {}) {
         return `data:${file.mime_type};base64,${fileBuffer.toString("base64")}`;
     }
 
-    async function readTextContent(file, options = {}) {
-        const maxChars = options.maxChars || MAX_DOCUMENT_TEXT_CHARS;
-        const fileBuffer = await fs.readFile(file.storage_path);
-        const textContent = fileBuffer
-            .toString("utf8")
-            .replace(/\u0000/g, "")
-            .trim();
+    async function readTextPreview(file, options = {}) {
+        const maxChars =
+            options.maxChars || SOLOCHAT_DOCUMENT_PREVIEW_MAX_CHARS;
+        const textContent = await readRawUtf8TextContent(file);
+        const truncated = textContent.length > maxChars;
 
-        if (!textContent) {
+        return {
+            textContent: truncated ? textContent.slice(0, maxChars) : textContent,
+            truncated,
+            maxChars,
+        };
+    }
+
+    async function readTextContent(file, options = {}) {
+        const { textContent } = await readTextPreview(file, options);
+        const trimmedContent = textContent.trim();
+
+        if (!trimmedContent) {
             return "";
         }
 
-        return textContent.slice(0, maxChars);
+        return trimmedContent;
     }
 
     return {
         attachFilesToSoloChatMessage,
         buildDataUrl,
-        canUserAccessFile,
-        deleteUnattachedFileForUser,
         getFileById,
-        getFileForOwner,
-        listFilesByIds,
-        listFilesForAssignment,
+        getSoloChatFileForUser,
         listFilesForConversation,
         listFilesForSoloChatMessage,
-        listFilesForSubmission,
         processUpload,
         readTextContent,
-        replaceAssignmentFiles,
-        replaceSubmissionFiles,
+        readTextPreview,
     };
 }
 
@@ -559,7 +299,7 @@ function validateUploadedFile(file) {
 }
 
 async function normalizeSoloChatImageUpload(file) {
-    if (!String(file.mimetype || "").startsWith("image/")) {
+    if (!isSoloChatImageMimeType(file.mimetype)) {
         throw badRequest("solochat_image must be an image file");
     }
 
@@ -620,40 +360,28 @@ async function normalizeSoloChatImageUpload(file) {
     }
 }
 
-function normalizeSoloChatDocumentUpload(file) {
-    if (!isTextLikeFile(file)) {
+function normalizeSoloChatTextUpload(file) {
+    if (
+        !isAllowedSoloChatDocument({
+            mimeType: file.mimetype,
+            fileName: file.originalname,
+        })
+    ) {
         throw badRequest(
-            "solochat only supports images or text-like documents",
+            "solochat only supports images or approved text/code documents",
         );
     }
 
     return {
         ...file,
-        kind: FILE_KINDS.DOCUMENT,
+        kind: FILE_KINDS.TEXT,
     };
 }
 
-async function normalizeUploadForPurpose({ file, purpose }) {
-    if (purpose === FILE_PURPOSES.SOLOCHAT) {
-        return String(file.mimetype || "").startsWith("image/")
-            ? normalizeSoloChatImageUpload(file)
-            : normalizeSoloChatDocumentUpload(file);
-    }
-
-    return {
-        ...file,
-        kind: String(file.mimetype || "").startsWith("image/")
-            ? FILE_KINDS.IMAGE
-            : FILE_KINDS.FILE,
-    };
-}
-
-function validatePurpose(value) {
-    if (!Object.values(FILE_PURPOSES).includes(value)) {
-        throw badRequest("purpose must be a supported upload purpose");
-    }
-
-    return value;
+async function normalizeSoloChatUpload(file) {
+    return isSoloChatImageMimeType(file.mimetype)
+        ? normalizeSoloChatImageUpload(file)
+        : normalizeSoloChatTextUpload(file);
 }
 
 function normalizeIds(values) {
@@ -696,24 +424,9 @@ function replaceFileExtension(fileName, extension) {
     return fileName.replace(/\.[^.]+$/, "") + extension;
 }
 
-function isTextLikeFile(file) {
-    const mimeType = String(file.mimetype || "").toLowerCase();
-    const fileName = String(file.originalname || "").toLowerCase();
-
-    if (
-        mimeType.startsWith("text/") ||
-        mimeType === "application/json" ||
-        mimeType === "application/xml" ||
-        mimeType === "application/javascript" ||
-        mimeType === "application/x-javascript" ||
-        mimeType === "application/x-yaml"
-    ) {
-        return true;
-    }
-
-    return /\.(txt|md|markdown|csv|json|yaml|yml|xml|html|htm|css|js|mjs|cjs|ts|tsx|jsx|py|java|c|cpp|cc|h|hpp|go|rs|sql)$/i.test(
-        fileName,
-    );
+async function readRawUtf8TextContent(file) {
+    const fileBuffer = await fs.readFile(file.storage_path);
+    return fileBuffer.toString("utf8").replace(/\u0000/g, "");
 }
 
 async function deleteStoredFilesBestEffort(files) {
@@ -738,6 +451,5 @@ async function deleteStoredFilesBestEffort(files) {
 
 module.exports = {
     createFileService,
-    FILE_PURPOSES,
     MAX_UPLOAD_BYTES,
 };

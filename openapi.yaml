@@ -17,12 +17,6 @@ tags:
       description: Current-user profile endpoints
     - name: Classes
       description: Class creation, membership, and role management endpoints
-    - name: Assignments
-      description: Assignment publishing, submission, and review endpoints
-    - name: Dashboards
-      description: Aggregated teacher, class, and student dashboard endpoints
-    - name: Uploads
-      description: Shared file upload endpoints for assignments and submissions
     - name: SoloChat
       description: SoloChat conversation, message history, and streaming AI reply endpoints
 
@@ -275,629 +269,6 @@ components:
                     enum: [active, archived]
                     example: active
 
-        FileAsset:
-            type: object
-            required:
-                - id
-                - fileName
-                - url
-                - mimeType
-                - sizeBytes
-                - purpose
-                - createdAt
-            properties:
-                id:
-                    type: integer
-                    example: 21
-                fileName:
-                    type: string
-                    example: assignment-week-3.pdf
-                url:
-                    type: string
-                    example: /uploads/files/21
-                mimeType:
-                    type: string
-                    example: application/pdf
-                sizeBytes:
-                    type: integer
-                    example: 184291
-                width:
-                    type: integer
-                    nullable: true
-                    example: 1536
-                height:
-                    type: integer
-                    nullable: true
-                    example: 1024
-                kind:
-                    type: string
-                    enum: [image, document, file]
-                    example: image
-                purpose:
-                    type: string
-                    enum:
-                        [assignment_attachment, submission_attachment, solochat]
-                    example: assignment_attachment
-                createdAt:
-                    type: string
-                    format: date-time
-                    example: 2026-03-25T09:31:00.456Z
-
-        Assignment:
-            type: object
-            required:
-                - id
-                - classId
-                - className
-                - title
-                - description
-                - attachments
-                - startAt
-                - dueAt
-                - allowLateSubmission
-                - maxScore
-                - status
-                - createdByUserId
-                - publishedAt
-                - closedAt
-                - createdAt
-                - updatedAt
-            properties:
-                id:
-                    type: integer
-                    example: 9
-                classId:
-                    type: integer
-                    example: 1
-                className:
-                    type: string
-                    example: Statics 101
-                title:
-                    type: string
-                    example: Week 3 Force Balance Homework
-                description:
-                    type: string
-                    example: Solve problems 1-5 and explain your free-body diagrams.
-                attachments:
-                    type: array
-                    items:
-                        $ref: "#/components/schemas/FileAsset"
-                startAt:
-                    type: string
-                    format: date-time
-                    nullable: true
-                    example: 2026-03-25T08:00:00.000Z
-                dueAt:
-                    type: string
-                    format: date-time
-                    nullable: true
-                    example: 2026-03-30T15:59:59.000Z
-                allowLateSubmission:
-                    type: boolean
-                    example: false
-                maxScore:
-                    type: number
-                    format: float
-                    example: 100
-                status:
-                    type: string
-                    enum: [draft, published, closed, archived]
-                    example: published
-                createdByUserId:
-                    type: integer
-                    example: 1
-                publishedAt:
-                    type: string
-                    format: date-time
-                    nullable: true
-                    example: 2026-03-25T08:10:00.000Z
-                closedAt:
-                    type: string
-                    format: date-time
-                    nullable: true
-                    example: null
-                createdAt:
-                    type: string
-                    format: date-time
-                    example: 2026-03-25T08:00:00.000Z
-                updatedAt:
-                    type: string
-                    format: date-time
-                    example: 2026-03-25T08:10:00.000Z
-
-        CreateAssignmentRequest:
-            type: object
-            required:
-                - title
-                - description
-            properties:
-                title:
-                    type: string
-                    maxLength: 200
-                    example: Week 3 Force Balance Homework
-                description:
-                    type: string
-                    maxLength: 10000
-                    example: Solve problems 1-5 and explain your free-body diagrams.
-                attachmentIds:
-                    type: array
-                    items:
-                        type: integer
-                    example: [21, 22]
-                startAt:
-                    type: string
-                    format: date-time
-                    nullable: true
-                    example: 2026-03-25T08:00:00.000Z
-                dueAt:
-                    type: string
-                    format: date-time
-                    nullable: true
-                    example: 2026-03-30T15:59:59.000Z
-                allowLateSubmission:
-                    type: boolean
-                    example: false
-                maxScore:
-                    type: number
-                    format: float
-                    example: 100
-                status:
-                    type: string
-                    enum: [draft, published]
-                    example: published
-
-        UpdateAssignmentRequest:
-            type: object
-            properties:
-                title:
-                    type: string
-                    maxLength: 200
-                    example: Week 3 Force Balance Homework - Revised
-                description:
-                    type: string
-                    maxLength: 10000
-                    example: Solve problems 1-6 and explain your free-body diagrams clearly.
-                attachmentIds:
-                    type: array
-                    items:
-                        type: integer
-                    example: [21, 22, 25]
-                startAt:
-                    type: string
-                    format: date-time
-                    nullable: true
-                    example: 2026-03-25T08:00:00.000Z
-                dueAt:
-                    type: string
-                    format: date-time
-                    nullable: true
-                    example: 2026-04-01T15:59:59.000Z
-                allowLateSubmission:
-                    type: boolean
-                    example: true
-                maxScore:
-                    type: number
-                    format: float
-                    example: 120
-
-        AssignmentReview:
-            type: object
-            required:
-                - score
-                - comment
-                - reviewedAt
-                - reviewerUserId
-                - reviewer
-            properties:
-                score:
-                    type: number
-                    format: float
-                    example: 92
-                comment:
-                    type: string
-                    example: Force decomposition is correct. Add more explanation for question 4.
-                reviewedAt:
-                    type: string
-                    format: date-time
-                    example: 2026-03-30T08:30:00.000Z
-                reviewerUserId:
-                    type: integer
-                    example: 1
-                reviewer:
-                    $ref: "#/components/schemas/User"
-
-        ReviewAssignmentSubmissionRequest:
-            type: object
-            required:
-                - score
-            properties:
-                score:
-                    type: number
-                    format: float
-                    example: 92
-                comment:
-                    type: string
-                    example: Force decomposition is correct. Add more explanation for question 4.
-
-        AssignmentSubmission:
-            type: object
-            required:
-                - id
-                - assignmentId
-                - studentId
-                - student
-                - submissionStatus
-                - textAnswer
-                - attachments
-                - submittedAt
-                - updatedAt
-                - isLate
-                - review
-            properties:
-                id:
-                    type: integer
-                    nullable: true
-                    example: 44
-                assignmentId:
-                    type: integer
-                    example: 9
-                studentId:
-                    type: integer
-                    example: 3
-                student:
-                    $ref: "#/components/schemas/User"
-                submissionStatus:
-                    type: string
-                    enum:
-                        [
-                            not_started,
-                            draft,
-                            submitted,
-                            late_submitted,
-                            reviewed,
-                        ]
-                    example: submitted
-                textAnswer:
-                    type: string
-                    example: I first drew the free-body diagram for each body and listed the equilibrium equations.
-                attachments:
-                    type: array
-                    items:
-                        $ref: "#/components/schemas/FileAsset"
-                submittedAt:
-                    type: string
-                    format: date-time
-                    nullable: true
-                    example: 2026-03-29T14:00:00.000Z
-                updatedAt:
-                    type: string
-                    format: date-time
-                    nullable: true
-                    example: 2026-03-29T14:00:00.000Z
-                isLate:
-                    type: boolean
-                    example: false
-                review:
-                    allOf:
-                        - $ref: "#/components/schemas/AssignmentReview"
-                    nullable: true
-
-        UpsertMyAssignmentSubmissionRequest:
-            type: object
-            required:
-                - status
-            properties:
-                textAnswer:
-                    type: string
-                    example: My written solution is below.
-                attachmentIds:
-                    type: array
-                    items:
-                        type: integer
-                    example: [31]
-                status:
-                    type: string
-                    enum: [draft, submitted]
-                    example: submitted
-
-        TeacherClassDashboardItem:
-            type: object
-            required:
-                - class
-                - studentCount
-                - assignmentCount
-                - pendingReviewCount
-                - upcomingDueCount
-            properties:
-                class:
-                    $ref: "#/components/schemas/Class"
-                studentCount:
-                    type: integer
-                    example: 32
-                assignmentCount:
-                    type: integer
-                    example: 8
-                pendingReviewCount:
-                    type: integer
-                    example: 14
-                upcomingDueCount:
-                    type: integer
-                    example: 2
-
-        TeacherClassesDashboard:
-            type: object
-            required:
-                - summary
-                - classes
-            properties:
-                summary:
-                    type: object
-                    required:
-                        - classCount
-                        - studentCount
-                        - assignmentCount
-                        - pendingReviewCount
-                    properties:
-                        classCount:
-                            type: integer
-                            example: 3
-                        studentCount:
-                            type: integer
-                            example: 96
-                        assignmentCount:
-                            type: integer
-                            example: 24
-                        pendingReviewCount:
-                            type: integer
-                            example: 31
-                classes:
-                    type: array
-                    items:
-                        $ref: "#/components/schemas/TeacherClassDashboardItem"
-
-        TeacherAssignmentDashboardItem:
-            type: object
-            required:
-                - assignmentId
-                - classId
-                - className
-                - title
-                - status
-                - dueAt
-                - totalStudents
-                - submittedCount
-                - reviewedCount
-                - pendingReviewCount
-            properties:
-                assignmentId:
-                    type: integer
-                    example: 9
-                classId:
-                    type: integer
-                    example: 1
-                className:
-                    type: string
-                    example: Statics 101
-                title:
-                    type: string
-                    example: Week 3 Force Balance Homework
-                status:
-                    type: string
-                    enum: [draft, published, closed, archived]
-                    example: published
-                dueAt:
-                    type: string
-                    format: date-time
-                    nullable: true
-                    example: 2026-03-30T15:59:59.000Z
-                totalStudents:
-                    type: integer
-                    example: 32
-                submittedCount:
-                    type: integer
-                    example: 28
-                reviewedCount:
-                    type: integer
-                    example: 17
-                pendingReviewCount:
-                    type: integer
-                    example: 11
-
-        TeacherAssignmentsDashboard:
-            type: object
-            required:
-                - summary
-                - assignments
-            properties:
-                summary:
-                    type: object
-                    required:
-                        - assignmentCount
-                        - publishedCount
-                        - pendingReviewCount
-                        - overdueCount
-                    properties:
-                        assignmentCount:
-                            type: integer
-                            example: 24
-                        publishedCount:
-                            type: integer
-                            example: 18
-                        pendingReviewCount:
-                            type: integer
-                            example: 31
-                        overdueCount:
-                            type: integer
-                            example: 4
-                assignments:
-                    type: array
-                    items:
-                        $ref: "#/components/schemas/TeacherAssignmentDashboardItem"
-
-        ClassDashboard:
-            type: object
-            required:
-                - class
-                - summary
-                - members
-                - assignments
-            properties:
-                class:
-                    $ref: "#/components/schemas/Class"
-                summary:
-                    type: object
-                    required:
-                        - studentCount
-                        - assignmentCount
-                        - pendingReviewCount
-                    properties:
-                        studentCount:
-                            type: integer
-                            example: 32
-                        assignmentCount:
-                            type: integer
-                            example: 8
-                        pendingReviewCount:
-                            type: integer
-                            example: 14
-                members:
-                    type: array
-                    items:
-                        $ref: "#/components/schemas/ClassMember"
-                assignments:
-                    type: array
-                    items:
-                        $ref: "#/components/schemas/TeacherAssignmentDashboardItem"
-
-        AssignmentClassDashboard:
-            type: object
-            required:
-                - assignment
-                - summary
-                - submissions
-            properties:
-                assignment:
-                    $ref: "#/components/schemas/Assignment"
-                summary:
-                    type: object
-                    required:
-                        - studentCount
-                        - submittedCount
-                        - reviewedCount
-                        - pendingReviewCount
-                        - lateCount
-                    properties:
-                        studentCount:
-                            type: integer
-                            example: 32
-                        submittedCount:
-                            type: integer
-                            example: 28
-                        reviewedCount:
-                            type: integer
-                            example: 17
-                        pendingReviewCount:
-                            type: integer
-                            example: 11
-                        lateCount:
-                            type: integer
-                            example: 3
-                submissions:
-                    type: array
-                    items:
-                        $ref: "#/components/schemas/AssignmentSubmission"
-
-        StudentAssignmentCard:
-            type: object
-            required:
-                - assignmentId
-                - classId
-                - className
-                - title
-                - dueAt
-                - assignmentStatus
-                - submissionStatus
-                - submittedAt
-                - isLate
-                - score
-            properties:
-                assignmentId:
-                    type: integer
-                    example: 9
-                classId:
-                    type: integer
-                    example: 1
-                className:
-                    type: string
-                    example: Statics 101
-                title:
-                    type: string
-                    example: Week 3 Force Balance Homework
-                dueAt:
-                    type: string
-                    format: date-time
-                    nullable: true
-                    example: 2026-03-30T15:59:59.000Z
-                assignmentStatus:
-                    type: string
-                    enum: [draft, published, closed, archived]
-                    example: published
-                submissionStatus:
-                    type: string
-                    enum:
-                        [
-                            not_started,
-                            draft,
-                            submitted,
-                            late_submitted,
-                            reviewed,
-                        ]
-                    example: submitted
-                submittedAt:
-                    type: string
-                    format: date-time
-                    nullable: true
-                    example: 2026-03-29T14:00:00.000Z
-                isLate:
-                    type: boolean
-                    example: false
-                score:
-                    type: number
-                    format: float
-                    nullable: true
-                    example: 92
-
-        StudentAssignmentsDashboard:
-            type: object
-            required:
-                - summary
-                - assignments
-            properties:
-                summary:
-                    type: object
-                    required:
-                        - pendingCount
-                        - dueSoonCount
-                        - submittedCount
-                        - reviewedCount
-                    properties:
-                        pendingCount:
-                            type: integer
-                            example: 3
-                        dueSoonCount:
-                            type: integer
-                            example: 1
-                        submittedCount:
-                            type: integer
-                            example: 6
-                        reviewedCount:
-                            type: integer
-                            example: 4
-                assignments:
-                    type: array
-                    items:
-                        $ref: "#/components/schemas/StudentAssignmentCard"
-
         SoloChatConversation:
             type: object
             required:
@@ -958,7 +329,7 @@ components:
                 attachments:
                     type: array
                     items:
-                        $ref: "#/components/schemas/SoloChatImageAttachment"
+                        $ref: "#/components/schemas/SoloChatAttachment"
                 createdAt:
                     type: string
                     format: date-time
@@ -981,12 +352,11 @@ components:
                         type: string
                         format: binary
 
-        SoloChatImageAttachment:
+        SoloChatAttachment:
             type: object
             required:
                 - id
                 - kind
-                - purpose
                 - fileName
                 - url
                 - mimeType
@@ -1000,18 +370,14 @@ components:
                     example: 7
                 kind:
                     type: string
-                    enum: [image, document]
+                    enum: [image, text]
                     example: image
-                purpose:
-                    type: string
-                    enum: [solochat]
-                    example: solochat
                 fileName:
                     type: string
                     example: beam-notes.md
                 url:
                     type: string
-                    example: /uploads/files/7
+                    example: /solochat/attachments/7
                 mimeType:
                     type: string
                     example: image/webp
@@ -1030,6 +396,39 @@ components:
                     type: string
                     format: date-time
                     example: 2026-03-25T09:31:00.456Z
+
+        SoloChatAttachmentTextPreview:
+            type: object
+            required:
+                - id
+                - fileName
+                - mimeType
+                - sizeBytes
+                - textContent
+                - truncated
+                - maxChars
+            properties:
+                id:
+                    type: integer
+                    example: 7
+                fileName:
+                    type: string
+                    example: beam-notes.md
+                mimeType:
+                    type: string
+                    example: text/markdown
+                sizeBytes:
+                    type: integer
+                    example: 2048
+                textContent:
+                    type: string
+                    example: "# Beam Notes\n\nUse the free-body diagram first."
+                truncated:
+                    type: boolean
+                    example: false
+                maxChars:
+                    type: integer
+                    example: 24000
 
 paths:
     /health:
@@ -1640,873 +1039,6 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/ErrorResponse"
 
-    /classes/{classId}/assignments:
-        get:
-            tags:
-                - Assignments
-            summary: List assignments for a joined class
-            operationId: listClassAssignments
-            security:
-                - cookieAuth: []
-            parameters:
-                - in: path
-                  name: classId
-                  required: true
-                  schema:
-                      type: integer
-            responses:
-                "200":
-                    description: Class assignments
-                    content:
-                        application/json:
-                            schema:
-                                type: array
-                                items:
-                                    $ref: "#/components/schemas/Assignment"
-                "400":
-                    description: Invalid class id
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "401":
-                    description: Not authenticated
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "404":
-                    description: Class not found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-
-        post:
-            tags:
-                - Assignments
-            summary: Create an assignment for a class
-            operationId: createClassAssignment
-            security:
-                - cookieAuth: []
-            parameters:
-                - in: path
-                  name: classId
-                  required: true
-                  schema:
-                      type: integer
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            $ref: "#/components/schemas/CreateAssignmentRequest"
-            responses:
-                "201":
-                    description: Assignment created
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/Assignment"
-                "400":
-                    description: Invalid class id or assignment fields
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "401":
-                    description: Not authenticated
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "403":
-                    description: Only class teachers can create assignments
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "404":
-                    description: Class not found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-
-    /assignments/{assignmentId}:
-        get:
-            tags:
-                - Assignments
-            summary: Get an assignment
-            operationId: getAssignment
-            security:
-                - cookieAuth: []
-            parameters:
-                - in: path
-                  name: assignmentId
-                  required: true
-                  schema:
-                      type: integer
-            responses:
-                "200":
-                    description: Assignment detail
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/Assignment"
-                "400":
-                    description: Invalid assignment id
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "401":
-                    description: Not authenticated
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "404":
-                    description: Assignment not found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-
-        patch:
-            tags:
-                - Assignments
-            summary: Update an assignment
-            operationId: updateAssignment
-            security:
-                - cookieAuth: []
-            parameters:
-                - in: path
-                  name: assignmentId
-                  required: true
-                  schema:
-                      type: integer
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            $ref: "#/components/schemas/UpdateAssignmentRequest"
-            responses:
-                "200":
-                    description: Updated assignment
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/Assignment"
-                "400":
-                    description: Invalid assignment id or assignment fields
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "401":
-                    description: Not authenticated
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "403":
-                    description: Only class teachers can update assignments
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "404":
-                    description: Assignment not found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-
-        delete:
-            tags:
-                - Assignments
-            summary: Delete or archive an assignment
-            operationId: deleteAssignment
-            security:
-                - cookieAuth: []
-            parameters:
-                - in: path
-                  name: assignmentId
-                  required: true
-                  schema:
-                      type: integer
-            responses:
-                "204":
-                    description: Assignment deleted or archived
-                "400":
-                    description: Invalid assignment id or assignment cannot be deleted in its current state
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "401":
-                    description: Not authenticated
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "403":
-                    description: Only class teachers can delete assignments
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "404":
-                    description: Assignment not found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-
-    /assignments/{assignmentId}/publish:
-        post:
-            tags:
-                - Assignments
-            summary: Publish a draft assignment
-            operationId: publishAssignment
-            security:
-                - cookieAuth: []
-            parameters:
-                - in: path
-                  name: assignmentId
-                  required: true
-                  schema:
-                      type: integer
-            responses:
-                "200":
-                    description: Assignment published
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/Assignment"
-                "400":
-                    description: Invalid assignment id or assignment cannot be published
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "401":
-                    description: Not authenticated
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "403":
-                    description: Only class teachers can publish assignments
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "404":
-                    description: Assignment not found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-
-    /assignments/{assignmentId}/close:
-        post:
-            tags:
-                - Assignments
-            summary: Close an assignment
-            operationId: closeAssignment
-            security:
-                - cookieAuth: []
-            parameters:
-                - in: path
-                  name: assignmentId
-                  required: true
-                  schema:
-                      type: integer
-            responses:
-                "200":
-                    description: Assignment closed
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/Assignment"
-                "400":
-                    description: Invalid assignment id or assignment cannot be closed
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "401":
-                    description: Not authenticated
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "403":
-                    description: Only class teachers can close assignments
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "404":
-                    description: Assignment not found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-
-    /assignments/{assignmentId}/submissions:
-        get:
-            tags:
-                - Assignments
-            summary: List all student submissions for an assignment
-            operationId: listAssignmentSubmissions
-            security:
-                - cookieAuth: []
-            parameters:
-                - in: path
-                  name: assignmentId
-                  required: true
-                  schema:
-                      type: integer
-            responses:
-                "200":
-                    description: Assignment submissions for the class roster
-                    content:
-                        application/json:
-                            schema:
-                                type: array
-                                items:
-                                    $ref: "#/components/schemas/AssignmentSubmission"
-                "400":
-                    description: Invalid assignment id
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "401":
-                    description: Not authenticated
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "403":
-                    description: Only class teachers can view all submissions
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "404":
-                    description: Assignment not found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-
-    /assignments/{assignmentId}/submissions/me:
-        get:
-            tags:
-                - Assignments
-            summary: Get the current student's submission for an assignment
-            operationId: getMyAssignmentSubmission
-            security:
-                - cookieAuth: []
-            parameters:
-                - in: path
-                  name: assignmentId
-                  required: true
-                  schema:
-                      type: integer
-            responses:
-                "200":
-                    description: Current student's submission, or a placeholder with submissionStatus=not_started
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/AssignmentSubmission"
-                "400":
-                    description: Invalid assignment id
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "401":
-                    description: Not authenticated
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "403":
-                    description: Only class students can use this endpoint
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "404":
-                    description: Assignment not found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-
-        put:
-            tags:
-                - Assignments
-            summary: Save or submit the current student's assignment submission
-            operationId: upsertMyAssignmentSubmission
-            security:
-                - cookieAuth: []
-            parameters:
-                - in: path
-                  name: assignmentId
-                  required: true
-                  schema:
-                      type: integer
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            $ref: "#/components/schemas/UpsertMyAssignmentSubmissionRequest"
-            responses:
-                "200":
-                    description: Saved or submitted assignment submission
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/AssignmentSubmission"
-                "400":
-                    description: Invalid assignment id, submission fields, or submission not allowed
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "401":
-                    description: Not authenticated
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "403":
-                    description: Only class students can submit work for this assignment
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "404":
-                    description: Assignment not found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-
-    /assignments/{assignmentId}/submissions/{studentId}:
-        get:
-            tags:
-                - Assignments
-            summary: Get one student's submission for an assignment
-            operationId: getAssignmentSubmissionForStudent
-            security:
-                - cookieAuth: []
-            parameters:
-                - in: path
-                  name: assignmentId
-                  required: true
-                  schema:
-                      type: integer
-                - in: path
-                  name: studentId
-                  required: true
-                  schema:
-                      type: integer
-            responses:
-                "200":
-                    description: Student submission detail
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/AssignmentSubmission"
-                "400":
-                    description: Invalid assignment id or student id
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "401":
-                    description: Not authenticated
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "403":
-                    description: Only class teachers can view another student's submission
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "404":
-                    description: Assignment or student submission not found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-
-    /assignments/{assignmentId}/submissions/{studentId}/review:
-        patch:
-            tags:
-                - Assignments
-            summary: Review a student's assignment submission
-            operationId: reviewAssignmentSubmission
-            security:
-                - cookieAuth: []
-            parameters:
-                - in: path
-                  name: assignmentId
-                  required: true
-                  schema:
-                      type: integer
-                - in: path
-                  name: studentId
-                  required: true
-                  schema:
-                      type: integer
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            $ref: "#/components/schemas/ReviewAssignmentSubmissionRequest"
-            responses:
-                "200":
-                    description: Reviewed submission
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/AssignmentSubmission"
-                "400":
-                    description: Invalid ids or review fields
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "401":
-                    description: Not authenticated
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "403":
-                    description: Only class teachers can review submissions
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "404":
-                    description: Assignment or student submission not found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-
-    /dashboards/teacher/classes:
-        get:
-            tags:
-                - Dashboards
-            summary: Get the teacher's class overview dashboard
-            operationId: getTeacherClassesDashboard
-            security:
-                - cookieAuth: []
-            responses:
-                "200":
-                    description: Teacher class dashboard
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/TeacherClassesDashboard"
-                "401":
-                    description: Not authenticated
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "403":
-                    description: Only teachers can access this dashboard
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-
-    /dashboards/teacher/assignments:
-        get:
-            tags:
-                - Dashboards
-            summary: Get the teacher's assignment overview dashboard
-            operationId: getTeacherAssignmentsDashboard
-            security:
-                - cookieAuth: []
-            responses:
-                "200":
-                    description: Teacher assignment dashboard
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/TeacherAssignmentsDashboard"
-                "401":
-                    description: Not authenticated
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "403":
-                    description: Only teachers can access this dashboard
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-
-    /dashboards/classes/{classId}:
-        get:
-            tags:
-                - Dashboards
-            summary: Get a teacher-facing class dashboard
-            operationId: getClassDashboard
-            security:
-                - cookieAuth: []
-            parameters:
-                - in: path
-                  name: classId
-                  required: true
-                  schema:
-                      type: integer
-            responses:
-                "200":
-                    description: Class dashboard
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ClassDashboard"
-                "400":
-                    description: Invalid class id
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "401":
-                    description: Not authenticated
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "403":
-                    description: Only class teachers can access this dashboard
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "404":
-                    description: Class not found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-
-    /dashboards/classes/{classId}/assignments/{assignmentId}:
-        get:
-            tags:
-                - Dashboards
-            summary: Get a teacher-facing assignment dashboard for one class
-            operationId: getClassAssignmentDashboard
-            security:
-                - cookieAuth: []
-            parameters:
-                - in: path
-                  name: classId
-                  required: true
-                  schema:
-                      type: integer
-                - in: path
-                  name: assignmentId
-                  required: true
-                  schema:
-                      type: integer
-            responses:
-                "200":
-                    description: Assignment dashboard for a class
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/AssignmentClassDashboard"
-                "400":
-                    description: Invalid class id or assignment id
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "401":
-                    description: Not authenticated
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "403":
-                    description: Only class teachers can access this dashboard
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "404":
-                    description: Class or assignment not found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-
-    /dashboards/student/assignments:
-        get:
-            tags:
-                - Dashboards
-            summary: Get the current student's assignment dashboard
-            operationId: getStudentAssignmentsDashboard
-            security:
-                - cookieAuth: []
-            responses:
-                "200":
-                    description: Student assignments dashboard
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/StudentAssignmentsDashboard"
-                "401":
-                    description: Not authenticated
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "403":
-                    description: Only students can access this dashboard
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-
-    /uploads/files:
-        post:
-            tags:
-                - Uploads
-            summary: Upload a reusable assignment or submission attachment
-            operationId: uploadFile
-            security:
-                - cookieAuth: []
-            requestBody:
-                required: true
-                content:
-                    multipart/form-data:
-                        schema:
-                            type: object
-                            required:
-                                - file
-                                - purpose
-                            properties:
-                                file:
-                                    type: string
-                                    format: binary
-                                purpose:
-                                    type: string
-                                    enum:
-                                        [assignment_attachment, submission_attachment]
-                                    example: assignment_attachment
-            responses:
-                "201":
-                    description: File uploaded
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/FileAsset"
-                "400":
-                    description: Invalid purpose, unsupported file, or oversized file
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "401":
-                    description: Not authenticated
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-
-    /uploads/files/{fileId}:
-        get:
-            tags:
-                - Uploads
-            summary: Download a previously uploaded file attachment
-            operationId: getUploadedFile
-            security:
-                - cookieAuth: []
-            parameters:
-                - in: path
-                  name: fileId
-                  required: true
-                  schema:
-                      type: integer
-            responses:
-                "200":
-                    description: Uploaded file
-                    content:
-                        application/octet-stream:
-                            schema:
-                                type: string
-                                format: binary
-                "401":
-                    description: Not authenticated
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "404":
-                    description: File not found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-
-        delete:
-            tags:
-                - Uploads
-            summary: Delete an unattached uploaded file
-            operationId: deleteUploadedFile
-            security:
-                - cookieAuth: []
-            parameters:
-                - in: path
-                  name: fileId
-                  required: true
-                  schema:
-                      type: integer
-            responses:
-                "204":
-                    description: Uploaded file deleted
-                "401":
-                    description: Not authenticated
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "404":
-                    description: File not found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "409":
-                    description: File is already attached to an assignment, submission, or SoloChat message
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-
     /solochat/conversations:
         get:
             tags:
@@ -2675,6 +1207,81 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/ErrorResponse"
 
+    /solochat/attachments/{attachmentId}:
+        get:
+            tags:
+                - SoloChat
+            summary: Download a SoloChat attachment
+            operationId: getSoloChatAttachment
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: attachmentId
+                  required: true
+                  schema:
+                      type: integer
+            responses:
+                "200":
+                    description: SoloChat attachment content
+                    content:
+                        application/octet-stream:
+                            schema:
+                                type: string
+                                format: binary
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Attachment not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
+    /solochat/attachments/{attachmentId}/preview-text:
+        get:
+            tags:
+                - SoloChat
+            summary: Get parsed text preview content for a SoloChat text attachment
+            operationId: getSoloChatAttachmentPreviewText
+            security:
+                - cookieAuth: []
+            parameters:
+                - in: path
+                  name: attachmentId
+                  required: true
+                  schema:
+                      type: integer
+            responses:
+                "200":
+                    description: Parsed text preview for a SoloChat text attachment
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/SoloChatAttachmentTextPreview"
+                "400":
+                    description: Invalid attachment id or unsupported preview type
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "401":
+                    description: Not authenticated
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+                "404":
+                    description: Attachment not found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: "#/components/schemas/ErrorResponse"
+
     /solochat/conversations/{conversationId}/messages/stream:
         post:
             tags:
@@ -2698,6 +1305,9 @@ paths:
             requestBody:
                 required: true
                 content:
+                    application/json:
+                        schema:
+                            $ref: "#/components/schemas/CreateSoloChatMessageRequest"
                     multipart/form-data:
                         schema:
                             $ref: "#/components/schemas/CreateSoloChatMessageRequest"
@@ -2709,7 +1319,7 @@ paths:
                             schema:
                                 type: string
                                 example: |
-                                    {"type":"user_input","message":{"id":1,"conversationId":1,"role":"user","content":"Explain this image.","status":"completed","attachments":[{"id":7,"kind":"image","purpose":"solochat","fileName":"beam.png","url":"/uploads/files/7","mimeType":"image/webp","width":1536,"height":1024,"sizeBytes":482913,"createdAt":"2026-03-23T09:31:00.300Z"}],"createdAt":"2026-03-23T09:31:00.400Z","updatedAt":"2026-03-23T09:31:00.400Z"}}
+                                    {"type":"user_input","message":{"id":1,"conversationId":1,"role":"user","content":"Explain this image.","status":"completed","attachments":[{"id":7,"kind":"image","fileName":"beam.png","url":"/solochat/attachments/7","mimeType":"image/webp","width":1536,"height":1024,"sizeBytes":482913,"createdAt":"2026-03-23T09:31:00.300Z"},{"id":8,"kind":"text","fileName":"beam-notes.md","url":"/solochat/attachments/8","mimeType":"text/markdown","width":null,"height":null,"sizeBytes":2048,"createdAt":"2026-03-23T09:31:00.320Z"}],"createdAt":"2026-03-23T09:31:00.400Z","updatedAt":"2026-03-23T09:31:00.400Z"}}
                                     {"type":"assistant_start","message":{"id":2,"conversationId":1,"role":"assistant","content":"","status":"streaming","attachments":[],"createdAt":"2026-03-23T09:31:00.500Z","updatedAt":"2026-03-23T09:31:00.500Z"}}
                                     {"type":"assistant_delta","messageId":2,"delta":"Start by drawing "}
                                     {"type":"assistant_delta","messageId":2,"delta":"the free-body diagram."}
@@ -2722,7 +1332,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/ErrorResponse"
                 "415":
-                    description: Content-Type must be multipart/form-data
+                    description: Content-Type must be application/json or multipart/form-data
                     content:
                         application/json:
                             schema:
