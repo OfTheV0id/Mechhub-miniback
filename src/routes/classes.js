@@ -356,41 +356,7 @@ function createClassesRouter(db) {
         }
     });
 
-    router.post("/:classId/invite-code/rotate", async (req, res, next) => {
-        try {
-            const userId = requireUserId(req);
-            const classId = parseClassId(req.params.classId);
-            const classRecord = await classService.getClassForUser({
-                classId,
-                userId,
-            });
 
-            if (!classRecord) {
-                throw notFound("Class not found");
-            }
-
-            if (classRecord.owner_user_id !== userId) {
-                throw forbidden(
-                    "Only the class owner can rotate the invite code",
-                );
-            }
-
-            await classService.rotateInviteCode({
-                classId,
-                inviteCode: createInviteCode(),
-            });
-
-            const updatedClass = await classService.getClassForUser({
-                classId,
-                userId,
-            });
-            return res.json(
-                sanitizeClassRecord(attachCurrentUserId(updatedClass, userId)),
-            );
-        } catch (error) {
-            return next(error);
-        }
-    });
 
     router.post("/:classId/leave", async (req, res, next) => {
         try {

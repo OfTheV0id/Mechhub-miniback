@@ -812,51 +812,7 @@ paths:
                             schema:
                                 $ref: "#/components/schemas/ErrorResponse"
 
-    /classes/{classId}/invite-code/rotate:
-        post:
-            tags:
-                - Classes
-            summary: Rotate a class invite code
-            operationId: rotateClassInviteCode
-            security:
-                - cookieAuth: []
-            parameters:
-                - in: path
-                  name: classId
-                  required: true
-                  schema:
-                      type: integer
-            responses:
-                "200":
-                    description: Updated class with a new invite code
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/Class"
-                "400":
-                    description: Invalid class id
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "401":
-                    description: Not authenticated
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "403":
-                    description: Only the class owner can rotate the invite code
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
-                "404":
-                    description: Class not found
-                    content:
-                        application/json:
-                            schema:
-                                $ref: "#/components/schemas/ErrorResponse"
+
 
     /classes/{classId}/leave:
         post:

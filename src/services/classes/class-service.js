@@ -217,17 +217,7 @@ function createClassService(db) {
         return getClassById(classId);
     }
 
-    async function rotateInviteCode({ classId, inviteCode }) {
-        await db.run(
-            `UPDATE classes
-             SET invite_code = ?
-             WHERE id = ?`,
-            inviteCode,
-            classId,
-        );
 
-        return getClassById(classId);
-    }
 
     async function removeMember({ classId, memberId }) {
         return db.run(
@@ -259,7 +249,7 @@ function createClassService(db) {
         listClassesForUser,
         listMembers,
         removeMember,
-        rotateInviteCode,
+
         updateClass,
         updateMemberRole,
     };
