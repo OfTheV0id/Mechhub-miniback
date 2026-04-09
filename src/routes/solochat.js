@@ -106,6 +106,14 @@ function buildInlineContentDisposition(fileName) {
     return `inline; filename="${quotedFallback}"; filename*=UTF-8''${encodeURIComponent(normalizedFileName)}`;
 }
 
+function serializeId(value) {
+    if (value === undefined || value === null) {
+        return null;
+    }
+
+    return String(value);
+}
+
 function parseStreamMessageInput(req) {
     let body = req.body || {};
     let uploadedFiles = [];
@@ -213,7 +221,7 @@ function parseSoloChatUpload(req, res) {
 
 function sanitizeConversation(conversation) {
     return {
-        id: conversation.id,
+        id: serializeId(conversation.id),
         title: conversation.title,
         updatedAt: toIsoTimestamp(conversation.updated_at),
     };
@@ -225,10 +233,10 @@ function normalizeAttachmentKind(kind) {
 
 function sanitizeAttachment(attachment) {
     return {
-        id: attachment.id,
+        id: serializeId(attachment.id),
         kind: normalizeAttachmentKind(attachment.kind),
         fileName: attachment.file_name,
-        url: buildSoloChatAttachmentUrl(attachment.id),
+        url: buildSoloChatAttachmentUrl(serializeId(attachment.id)),
         mimeType: attachment.mime_type,
         width: attachment.width ?? null,
         height: attachment.height ?? null,
@@ -239,8 +247,8 @@ function sanitizeAttachment(attachment) {
 
 function sanitizeMessage(message) {
     return {
-        id: message.id,
-        conversationId: message.conversation_id,
+        id: serializeId(message.id),
+        conversationId: serializeId(message.conversation_id),
         role: message.role,
         content: message.content,
         status: message.status,
@@ -252,7 +260,7 @@ function sanitizeMessage(message) {
 
 function sanitizeTextPreviewResponse(attachment, preview) {
     return {
-        id: attachment.id,
+        id: serializeId(attachment.id),
         fileName: attachment.file_name,
         mimeType: attachment.mime_type,
         sizeBytes: attachment.size_bytes,
@@ -598,7 +606,7 @@ function createSoloChatRouter(db) {
 
                             writeStreamEvent(res, {
                                 type: "assistant_delta",
-                                messageId: assistantMessage.id,
+                                messageId: String(assistantMessage.id),
                                 delta,
                             });
                         },

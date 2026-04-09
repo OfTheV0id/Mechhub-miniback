@@ -78,6 +78,39 @@ function createFileService(db, options = {}) {
         }
     }
 
+    async function processImageUpload({ userId, file, subDir = "images" }) {
+        validateUploadedFile(file);
+
+        const normalizedFile = await normalizeImageUpload(file);
+        const safeFileName = sanitizeFileName(file.originalname || "image.bin");
+        const storedFileName = replaceFileExtension(safeFileName, ".webp");
+        const relativePath = path.join(
+            subDir,
+            String(userId),
+            `${crypto.randomUUID()}-${storedFileName}`,
+        );
+        const absolutePath = path.join(uploadsRoot, relativePath);
+
+        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+        await fs.writeFile(absolutePath, normalizedFile.buffer);
+
+        try {
+            return await createFileRecord({
+                userId,
+                storagePath: absolutePath,
+                fileName: storedFileName,
+                mimeType: "image/webp",
+                sizeBytes: normalizedFile.size,
+                width: normalizedFile.width ?? null,
+                height: normalizedFile.height ?? null,
+                kind: FILE_KINDS.IMAGE,
+            });
+        } catch (error) {
+            await deleteStoredFilesBestEffort([{ storage_path: absolutePath }]);
+            throw error;
+        }
+    }
+
     async function createFileRecord({
         userId,
         storagePath,
@@ -278,6 +311,7 @@ function createFileService(db, options = {}) {
         getSoloChatFileForUser,
         listFilesForConversation,
         listFilesForSoloChatMessage,
+        processImageUpload,
         processUpload,
         readTextContent,
         readTextPreview,
@@ -303,6 +337,10 @@ async function normalizeSoloChatImageUpload(file) {
         throw badRequest("solochat_image must be an image file");
     }
 
+    return normalizeImageUpload(file);
+}
+
+async function normalizeImageUpload(file) {
     try {
         const image = sharp(file.buffer, {
             failOn: "error",

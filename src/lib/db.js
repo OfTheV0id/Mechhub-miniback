@@ -215,6 +215,16 @@ async function ensureClassTables(db) {
         CREATE INDEX IF NOT EXISTS idx_class_members_user_id
         ON class_members(user_id, class_id)
     `);
+
+    // 检查并添加 avatar_file_id 字段
+    const columns = await db.all(`PRAGMA table_info(classes)`);
+    const columnNames = new Set(columns.map((column) => column.name));
+
+    if (!columnNames.has("avatar_file_id")) {
+        await db.exec(
+            `ALTER TABLE classes ADD COLUMN avatar_file_id INTEGER DEFAULT NULL REFERENCES uploaded_files(id)`
+        );
+    }
 }
 
 async function migrateLegacyAssignmentAndUploadTables(db) {

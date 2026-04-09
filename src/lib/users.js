@@ -34,7 +34,7 @@ const NAME_SUFFIXES = [
 
 function sanitizeUser(user) {
     return {
-        id: user.id,
+        id: user.id == null ? null : String(user.id),
         email: user.email,
         displayName: user.display_name,
         avatarUrl: user.avatar_url,

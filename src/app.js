@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const { createClassEventsHub } = require("./lib/class-events-hub");
 const { createSessionMiddleware } = require("./lib/session-store");
 const { createAuthRouter } = require("./routes/auth");
 const { createClassesRouter } = require("./routes/classes");
@@ -9,6 +10,7 @@ const { errorHandler } = require("./middleware/error-handler");
 
 function createApp(db) {
     const app = express();
+    const classEventsHub = createClassEventsHub();
 
     app.use(
         cors({
@@ -24,7 +26,7 @@ function createApp(db) {
     });
 
     app.use("/auth", createAuthRouter(db));
-    app.use("/classes", createClassesRouter(db));
+    app.use("/classes", createClassesRouter(db, { classEventsHub }));
     app.use("/solochat", createSoloChatRouter(db));
     app.use("/users", createUsersRouter(db));
 

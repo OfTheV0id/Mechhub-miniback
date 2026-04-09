@@ -1,5 +1,7 @@
 const express = require("express");
+const multer = require("multer");
 const { createClassService } = require("../services/classes/class-service");
+const { createFileService } = require("../services/uploads/file-service");
 const {
     USER_ROLES,
     createInviteCode,
@@ -8,6 +10,14 @@ const {
     sanitizeUser,
 } = require("../lib/users");
 const { toIsoTimestamp } = require("../lib/time");
+
+// 配置 multer 使用内存存储
+const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+        fileSize: 20 * 1024 * 1024, // 20MB 限制
+    },
+});
 
 function badRequest(message) {
     const error = new Error(message);
@@ -139,37 +149,95 @@ function parseInviteCode(value) {
     return inviteCode;
 }
 
-function sanitizeClassRecord(classRecord) {
+function serializeId(value) {
+    if (value === undefined || value === null) {
+        return null;
+    }
+
+    return String(value);
+}
+
+// 用于列表 - 精简字段
+function sanitizeClassListRecord(classRecord) {
     return {
-        id: classRecord.id,
+        id: serializeId(classRecord.id),
+        name: classRecord.name,
+        status: classRecord.status,
+        membershipRole: classRecord.membership_role || null,
+        isOwner: classRecord.owner_user_id === classRecord.current_user_id,
+        avatar: sanitizeAvatar(classRecord),
+    };
+}
+
+// 用于详情 - 完整字段
+function sanitizeClassDetailRecord(classRecord) {
+    return {
+        id: serializeId(classRecord.id),
         name: classRecord.name,
         description: classRecord.description,
-        ownerUserId: classRecord.owner_user_id,
+        ownerUserId: serializeId(classRecord.owner_user_id),
         inviteCode: classRecord.invite_code,
         status: classRecord.status,
         createdAt: toIsoTimestamp(classRecord.created_at),
         membershipRole: classRecord.membership_role || null,
         isOwner: classRecord.owner_user_id === classRecord.current_user_id,
+        avatar: sanitizeAvatar(classRecord),
     };
 }
 
-function sanitizeMembership(member, ownerUserId) {
+function sanitizeAvatar(classRecord) {
+    if (!classRecord.avatar_file_id) {
+        return null;
+    }
+
     return {
-        id: member.id,
-        classId: member.class_id,
-        userId: member.user_id,
+        id: serializeId(classRecord.avatar_id),
+        fileName: classRecord.avatar_file_name,
+        mimeType: classRecord.avatar_mime_type,
+        sizeBytes: classRecord.avatar_size_bytes,
+        width: classRecord.avatar_width,
+        height: classRecord.avatar_height,
+        createdAt: classRecord.avatar_created_at
+            ? toIsoTimestamp(classRecord.avatar_created_at)
+            : null,
+    };
+}
+
+function buildInlineContentDisposition(fileName) {
+    const normalizedFileName = String(fileName || "download")
+        .replace(/[\r\n]+/g, " ")
+        .trim();
+    const asciiFallback =
+        normalizedFileName.replace(/[^\x20-\x7E]+/g, "_") || "download";
+    const quotedFallback = asciiFallback
+        .replace(/\\/g, "\\\\")
+        .replace(/"/g, '\\"');
+
+    return `inline; filename="${quotedFallback}"; filename*=UTF-8''${encodeURIComponent(normalizedFileName)}`;
+}
+
+function sanitizeMembership(member, ownerUserId) {
+    const user = sanitizeUser({
+        id: member.user_id,
+        email: member.email,
+        display_name: member.display_name,
+        avatar_url: member.avatar_url,
+        bio: member.bio,
+        default_role: member.default_role,
+        created_at: member.user_created_at,
+    });
+
+    return {
+        id: serializeId(member.id),
+        classId: serializeId(member.class_id),
+        userId: serializeId(member.user_id),
         role: member.role,
         joinedAt: toIsoTimestamp(member.joined_at),
         isOwner: member.user_id === ownerUserId,
-        user: sanitizeUser({
-            id: member.user_id,
-            email: member.email,
-            display_name: member.display_name,
-            avatar_url: member.avatar_url,
-            bio: member.bio,
-            default_role: member.default_role,
-            created_at: member.user_created_at,
-        }),
+        user: {
+            ...user,
+            id: serializeId(user.id),
+        },
     };
 }
 
@@ -180,9 +248,25 @@ function attachCurrentUserId(classRecord, userId) {
     };
 }
 
-function createClassesRouter(db) {
+function createClassesRouter(db, { classEventsHub }) {
     const router = express.Router();
     const classService = createClassService(db);
+
+    async function emitClassInvalidation({
+        classId,
+        targets,
+        reason,
+        extraUserIds = [],
+    }) {
+        const memberUserIds = await classService.listMemberUserIds(classId);
+
+        classEventsHub.emitToUsers([...memberUserIds, ...extraUserIds], {
+            type: "class.invalidate",
+            classId: String(classId),
+            targets,
+            reason,
+        });
+    }
 
     router.get("/", async (req, res, next) => {
         try {
@@ -191,7 +275,7 @@ function createClassesRouter(db) {
 
             return res.json(
                 classes.map((classRecord) =>
-                    sanitizeClassRecord(
+                    sanitizeClassListRecord(
                         attachCurrentUserId(classRecord, userId),
                     ),
                 ),
@@ -223,10 +307,17 @@ function createClassesRouter(db) {
                 inviteCode: createInviteCode(),
             });
 
+            await emitClassInvalidation({
+                classId: classRecord.id,
+                targets: ["classes", "classDetail", "members"],
+                reason: "class_created",
+                extraUserIds: [userId],
+            });
+
             return res
                 .status(201)
                 .json(
-                    sanitizeClassRecord(
+                    sanitizeClassDetailRecord(
                         attachCurrentUserId(classRecord, userId),
                     ),
                 );
@@ -273,13 +364,35 @@ function createClassesRouter(db) {
                 userId,
             });
 
+            await emitClassInvalidation({
+                classId: classRecord.id,
+                targets: ["classes", "classDetail", "members"],
+                reason: "member_joined",
+            });
+
             return res
                 .status(201)
                 .json(
-                    sanitizeClassRecord(
+                    sanitizeClassDetailRecord(
                         attachCurrentUserId(joinedClass, userId),
                     ),
                 );
+        } catch (error) {
+            return next(error);
+        }
+    });
+
+    router.get("/events", async (req, res, next) => {
+        try {
+            const userId = requireUserId(req);
+
+            res.setHeader("Content-Type", "text/event-stream");
+            res.setHeader("Cache-Control", "no-cache");
+            res.setHeader("Connection", "keep-alive");
+            res.flushHeaders?.();
+
+            const unsubscribe = classEventsHub.subscribe(userId, res);
+            req.on("close", unsubscribe);
         } catch (error) {
             return next(error);
         }
@@ -299,7 +412,7 @@ function createClassesRouter(db) {
             }
 
             return res.json(
-                sanitizeClassRecord(attachCurrentUserId(classRecord, userId)),
+                sanitizeClassDetailRecord(attachCurrentUserId(classRecord, userId)),
             );
         } catch (error) {
             return next(error);
@@ -348,15 +461,139 @@ function createClassesRouter(db) {
                 classId,
                 userId,
             });
+
+            await emitClassInvalidation({
+                classId,
+                targets: ["classes", "classDetail"],
+                reason: "class_updated",
+            });
+
             return res.json(
-                sanitizeClassRecord(attachCurrentUserId(updatedClass, userId)),
+                sanitizeClassDetailRecord(attachCurrentUserId(updatedClass, userId)),
             );
         } catch (error) {
             return next(error);
         }
     });
 
+    router.post("/:classId/avatar", upload.single("avatar"), async (req, res, next) => {
+        try {
+            const userId = requireUserId(req);
+            const classId = parseClassId(req.params.classId);
 
+            const classRecord = await classService.getClassForUser({
+                classId,
+                userId,
+            });
+
+            if (!classRecord) {
+                throw notFound("Class not found");
+            }
+
+            if (classRecord.owner_user_id !== userId) {
+                throw forbidden("Only the class owner can upload avatar");
+            }
+
+            if (!req.file) {
+                throw badRequest("Avatar file is required");
+            }
+
+            const fileService = createFileService(db);
+            const uploadedFile = await fileService.processImageUpload({
+                userId,
+                file: req.file,
+                subDir: "class-avatars",
+            });
+
+            await classService.updateClassAvatar({
+                classId,
+                fileId: uploadedFile.id,
+            });
+
+            const updatedClass = await classService.getClassForUser({
+                classId,
+                userId,
+            });
+
+            await emitClassInvalidation({
+                classId,
+                targets: ["classes", "classDetail"],
+                reason: "avatar_updated",
+            });
+
+            return res.status(200).json(
+                sanitizeClassDetailRecord(attachCurrentUserId(updatedClass, userId)),
+            );
+        } catch (error) {
+            return next(error);
+        }
+    });
+
+    router.delete("/:classId/avatar", async (req, res, next) => {
+        try {
+            const userId = requireUserId(req);
+            const classId = parseClassId(req.params.classId);
+
+            const classRecord = await classService.getClassForUser({
+                classId,
+                userId,
+            });
+
+            if (!classRecord) {
+                throw notFound("Class not found");
+            }
+
+            if (classRecord.owner_user_id !== userId) {
+                throw forbidden("Only the class owner can remove avatar");
+            }
+
+            await classService.removeClassAvatar(classId);
+            await emitClassInvalidation({
+                classId,
+                targets: ["classes", "classDetail"],
+                reason: "avatar_removed",
+            });
+
+            return res.status(204).end();
+        } catch (error) {
+            return next(error);
+        }
+    });
+
+    router.get("/:classId/avatar", async (req, res, next) => {
+        try {
+            const userId = requireUserId(req);
+            const classId = parseClassId(req.params.classId);
+
+            const classRecord = await classService.getClassForUser({
+                classId,
+                userId,
+            });
+
+            if (!classRecord) {
+                throw notFound("Class not found");
+            }
+
+            if (!classRecord.avatar_file_id) {
+                throw notFound("Avatar not found");
+            }
+
+            const fileService = createFileService(db);
+            const file = await fileService.getFileById(classRecord.avatar_file_id);
+
+            if (!file) {
+                throw notFound("Avatar file not found");
+            }
+
+            res.setHeader(
+                "Content-Disposition",
+                buildInlineContentDisposition(file.file_name),
+            );
+            return res.type(file.mime_type).sendFile(file.storage_path);
+        } catch (error) {
+            return next(error);
+        }
+    });
 
     router.post("/:classId/leave", async (req, res, next) => {
         try {
@@ -378,6 +615,12 @@ function createClassesRouter(db) {
             }
 
             await classService.leaveClass({ classId, userId });
+            await emitClassInvalidation({
+                classId,
+                targets: ["classes", "classDetail", "members"],
+                reason: "member_left",
+                extraUserIds: [userId],
+            });
             return res.status(204).end();
         } catch (error) {
             return next(error);
@@ -447,6 +690,13 @@ function createClassesRouter(db) {
             const members = await classService.listMembers(classId);
             const updatedMember = members.find((row) => row.id === memberId);
 
+            await emitClassInvalidation({
+                classId,
+                targets: ["classes", "classDetail", "members"],
+                reason: "member_role_updated",
+                extraUserIds: [member.user_id],
+            });
+
             return res.json(
                 sanitizeMembership(updatedMember, classRecord.owner_user_id),
             );
@@ -487,6 +737,12 @@ function createClassesRouter(db) {
             }
 
             await classService.removeMember({ classId, memberId });
+            await emitClassInvalidation({
+                classId,
+                targets: ["classes", "classDetail", "members"],
+                reason: "member_removed",
+                extraUserIds: [member.user_id],
+            });
             return res.status(204).end();
         } catch (error) {
             return next(error);

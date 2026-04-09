@@ -47,15 +47,20 @@ function createClassService(db) {
             `SELECT
                  c.id,
                  c.name,
-                 c.description,
-                 c.owner_user_id,
-                 c.invite_code,
                  c.status,
-                 c.created_at,
-                 cm.role AS membership_role
+                 c.owner_user_id,
+                 c.avatar_file_id,
+                 cm.role AS membership_role,
+                 uf.id AS avatar_id,
+                 uf.file_name AS avatar_file_name,
+                 uf.mime_type AS avatar_mime_type,
+                 uf.size_bytes AS avatar_size_bytes,
+                 uf.width AS avatar_width,
+                 uf.height AS avatar_height,
+                 uf.created_at AS avatar_created_at
              FROM classes c
-             INNER JOIN class_members cm
-                 ON cm.class_id = c.id
+             INNER JOIN class_members cm ON cm.class_id = c.id
+             LEFT JOIN uploaded_files uf ON uf.id = c.avatar_file_id
              WHERE cm.user_id = ?
              ORDER BY c.created_at DESC, c.id DESC`,
             userId,
@@ -72,10 +77,18 @@ function createClassService(db) {
                  c.invite_code,
                  c.status,
                  c.created_at,
-                 cm.role AS membership_role
+                 c.avatar_file_id,
+                 cm.role AS membership_role,
+                 uf.id AS avatar_id,
+                 uf.file_name AS avatar_file_name,
+                 uf.mime_type AS avatar_mime_type,
+                 uf.size_bytes AS avatar_size_bytes,
+                 uf.width AS avatar_width,
+                 uf.height AS avatar_height,
+                 uf.created_at AS avatar_created_at
              FROM classes c
-             INNER JOIN class_members cm
-                 ON cm.class_id = c.id
+             INNER JOIN class_members cm ON cm.class_id = c.id
+             LEFT JOIN uploaded_files uf ON uf.id = c.avatar_file_id
              WHERE c.id = ? AND cm.user_id = ?`,
             classId,
             userId,
@@ -84,18 +97,48 @@ function createClassService(db) {
 
     async function getClassByInviteCode(inviteCode) {
         return db.get(
-            `SELECT id, name, description, owner_user_id, invite_code, status, created_at
-             FROM classes
-             WHERE invite_code = ?`,
+            `SELECT
+                 c.id,
+                 c.name,
+                 c.description,
+                 c.owner_user_id,
+                 c.invite_code,
+                 c.status,
+                 c.created_at,
+                 c.avatar_file_id,
+                 uf.id AS avatar_id,
+                 uf.file_name AS avatar_file_name,
+                 uf.mime_type AS avatar_mime_type,
+                 uf.size_bytes AS avatar_size_bytes,
+                 uf.width AS avatar_width,
+                 uf.height AS avatar_height
+             FROM classes c
+             LEFT JOIN uploaded_files uf ON uf.id = c.avatar_file_id
+             WHERE c.invite_code = ?`,
             inviteCode,
         );
     }
 
     async function getClassById(classId) {
         return db.get(
-            `SELECT id, name, description, owner_user_id, invite_code, status, created_at
-             FROM classes
-             WHERE id = ?`,
+            `SELECT
+                 c.id,
+                 c.name,
+                 c.description,
+                 c.owner_user_id,
+                 c.invite_code,
+                 c.status,
+                 c.created_at,
+                 c.avatar_file_id,
+                 uf.id AS avatar_id,
+                 uf.file_name AS avatar_file_name,
+                 uf.mime_type AS avatar_mime_type,
+                 uf.size_bytes AS avatar_size_bytes,
+                 uf.width AS avatar_width,
+                 uf.height AS avatar_height
+             FROM classes c
+             LEFT JOIN uploaded_files uf ON uf.id = c.avatar_file_id
+             WHERE c.id = ?`,
             classId,
         );
     }
@@ -154,6 +197,17 @@ function createClassService(db) {
             classId,
             classId,
         );
+    }
+
+    async function listMemberUserIds(classId) {
+        const rows = await db.all(
+            `SELECT user_id
+             FROM class_members
+             WHERE class_id = ?`,
+            classId,
+        );
+
+        return rows.map((row) => row.user_id);
     }
 
     async function getMemberById({ classId, memberId }) {
@@ -237,6 +291,38 @@ function createClassService(db) {
         );
     }
 
+    async function updateClassAvatar({ classId, fileId }) {
+        // 获取旧头像文件ID
+        const classRecord = await getClassById(classId);
+        const oldAvatarFileId = classRecord?.avatar_file_id;
+
+        // 更新班级头像
+        await db.run(
+            `UPDATE classes SET avatar_file_id = ? WHERE id = ?`,
+            fileId,
+            classId,
+        );
+
+        // 如果存在旧头像，删除旧文件记录
+        if (oldAvatarFileId && oldAvatarFileId !== fileId) {
+            await db.run(`DELETE FROM uploaded_files WHERE id = ?`, oldAvatarFileId);
+        }
+
+        return getClassById(classId);
+    }
+
+    async function removeClassAvatar(classId) {
+        const classRecord = await getClassById(classId);
+        const oldAvatarFileId = classRecord?.avatar_file_id;
+
+        if (oldAvatarFileId) {
+            await db.run(`UPDATE classes SET avatar_file_id = NULL WHERE id = ?`, classId);
+            await db.run(`DELETE FROM uploaded_files WHERE id = ?`, oldAvatarFileId);
+        }
+
+        return getClassById(classId);
+    }
+
     return {
         createClass,
         getClassById,
@@ -247,11 +333,13 @@ function createClassService(db) {
         joinClass,
         leaveClass,
         listClassesForUser,
+        listMemberUserIds,
         listMembers,
         removeMember,
-
         updateClass,
         updateMemberRole,
+        updateClassAvatar,
+        removeClassAvatar,
     };
 }
 
