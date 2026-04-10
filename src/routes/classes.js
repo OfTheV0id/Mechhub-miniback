@@ -366,7 +366,7 @@ function createClassesRouter(db, { classEventsHub }) {
 
             await emitClassInvalidation({
                 classId: classRecord.id,
-                targets: ["classes", "classDetail", "members"],
+                targets: ["members"],
                 reason: "member_joined",
             });
 
@@ -617,7 +617,7 @@ function createClassesRouter(db, { classEventsHub }) {
             await classService.leaveClass({ classId, userId });
             await emitClassInvalidation({
                 classId,
-                targets: ["classes", "classDetail", "members"],
+                targets: ["members"],
                 reason: "member_left",
                 extraUserIds: [userId],
             });
@@ -692,7 +692,7 @@ function createClassesRouter(db, { classEventsHub }) {
 
             await emitClassInvalidation({
                 classId,
-                targets: ["classes", "classDetail", "members"],
+                targets: ["members"],
                 reason: "member_role_updated",
                 extraUserIds: [member.user_id],
             });
@@ -739,7 +739,7 @@ function createClassesRouter(db, { classEventsHub }) {
             await classService.removeMember({ classId, memberId });
             await emitClassInvalidation({
                 classId,
-                targets: ["classes", "classDetail", "members"],
+                targets: ["members"],
                 reason: "member_removed",
                 extraUserIds: [member.user_id],
             });
