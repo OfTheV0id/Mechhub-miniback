@@ -6,6 +6,7 @@ const { SQLITE_NOW_ISO_EXPRESSION } = require("../../lib/time");
 const {
     SOLOCHAT_DOCUMENT_PREVIEW_MAX_CHARS,
     isAllowedSoloChatDocument,
+    isSoloChatImageFileName,
     isSoloChatImageMimeType,
 } = require("../solochat/attachment-contract");
 
@@ -160,12 +161,25 @@ function createFileService(db, options = {}) {
         return db.get(
             `SELECT uf.id, uf.owner_user_id, uf.storage_path, uf.file_name, uf.mime_type, uf.size_bytes, uf.width, uf.height, uf.kind, uf.created_at
              FROM uploaded_files uf
-             INNER JOIN solochat_message_files smf ON smf.file_id = uf.id
-             INNER JOIN solochat_messages sm ON sm.id = smf.message_id
-             INNER JOIN solochat_conversations sc ON sc.id = sm.conversation_id
-             WHERE uf.id = ? AND sc.user_id = ?
+             WHERE uf.id = ?
+               AND (
+                    EXISTS (
+                        SELECT 1
+                        FROM solochat_message_files smf
+                        INNER JOIN solochat_messages sm ON sm.id = smf.message_id
+                        INNER JOIN solochat_conversations sc ON sc.id = sm.conversation_id
+                        WHERE smf.file_id = uf.id AND sc.user_id = ?
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM solochat_grading_task_files sgtf
+                        INNER JOIN solochat_grading_tasks sgt ON sgt.id = sgtf.task_id
+                        WHERE sgtf.file_id = uf.id AND sgt.user_id = ?
+                    )
+               )
              LIMIT 1`,
             fileId,
+            userId,
             userId,
         );
     }
@@ -200,12 +214,22 @@ function createFileService(db, options = {}) {
 
     async function listFilesForConversation(conversationId) {
         return db.all(
-            `SELECT uf.id, uf.owner_user_id, uf.storage_path, uf.file_name, uf.mime_type, uf.size_bytes, uf.width, uf.height, uf.kind, uf.created_at
-             FROM solochat_message_files smf
-             INNER JOIN solochat_messages sm ON sm.id = smf.message_id
-             INNER JOIN uploaded_files uf ON uf.id = smf.file_id
-             WHERE sm.conversation_id = ?
+            `SELECT DISTINCT uf.id, uf.owner_user_id, uf.storage_path, uf.file_name, uf.mime_type, uf.size_bytes, uf.width, uf.height, uf.kind, uf.created_at
+             FROM uploaded_files uf
+             WHERE EXISTS (
+                     SELECT 1
+                     FROM solochat_message_files smf
+                     INNER JOIN solochat_messages sm ON sm.id = smf.message_id
+                     WHERE smf.file_id = uf.id AND sm.conversation_id = ?
+                 )
+                OR EXISTS (
+                     SELECT 1
+                     FROM solochat_grading_task_files sgtf
+                     INNER JOIN solochat_grading_tasks sgt ON sgt.id = sgtf.task_id
+                     WHERE sgtf.file_id = uf.id AND sgt.conversation_id = ?
+                 )
              ORDER BY uf.id ASC`,
+            conversationId,
             conversationId,
         );
     }
@@ -333,7 +357,16 @@ function validateUploadedFile(file) {
 }
 
 async function normalizeSoloChatImageUpload(file) {
-    if (!isSoloChatImageMimeType(file.mimetype)) {
+    const normalizedMimeType = String(file.mimetype || "")
+        .trim()
+        .toLowerCase();
+    const isImageMime = isSoloChatImageMimeType(normalizedMimeType);
+    const isFallbackImage =
+        (!normalizedMimeType ||
+            normalizedMimeType === "application/octet-stream") &&
+        isSoloChatImageFileName(file.originalname);
+
+    if (!isImageMime && !isFallbackImage) {
         throw badRequest("solochat_image must be an image file");
     }
 
@@ -417,7 +450,11 @@ function normalizeSoloChatTextUpload(file) {
 }
 
 async function normalizeSoloChatUpload(file) {
-    return isSoloChatImageMimeType(file.mimetype)
+    return isSoloChatImageMimeType(file.mimetype) ||
+        (!String(file.mimetype || "").trim() ||
+            String(file.mimetype || "").trim().toLowerCase() ===
+                "application/octet-stream") &&
+            isSoloChatImageFileName(file.originalname)
         ? normalizeSoloChatImageUpload(file)
         : normalizeSoloChatTextUpload(file);
 }

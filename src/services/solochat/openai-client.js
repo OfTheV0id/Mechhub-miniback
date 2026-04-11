@@ -78,6 +78,7 @@ function createOpenAiCompatibleClient() {
         messages,
         temperature = 0.7,
         model,
+        maxTokens,
         signal: requestSignal,
     }) {
         const resolvedModel = validateConfig(model);
@@ -99,6 +100,7 @@ function createOpenAiCompatibleClient() {
                     messages,
                     temperature,
                     stream: true,
+                    ...(maxTokens ? { max_tokens: maxTokens } : {}),
                 }),
                 signal: controller.signal,
             });

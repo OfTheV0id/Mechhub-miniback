@@ -50,19 +50,20 @@ function createSoloChatConversationService(db) {
 
     async function listMessages(conversationId) {
         const messages = await db.all(
-            `SELECT id, conversation_id, role, content, status, created_at, updated_at
+            `SELECT id, conversation_id, role, type, content, status, created_at, updated_at
              FROM solochat_messages
              WHERE conversation_id = ?
              ORDER BY id ASC`,
             conversationId,
         );
 
-        return attachAttachments(messages);
+        return hydrateMessages(messages);
     }
 
     async function createMessage({
         conversationId,
         role,
+        type = "text",
         content,
         status = "completed",
     }) {
@@ -70,14 +71,16 @@ function createSoloChatConversationService(db) {
             `INSERT INTO solochat_messages (
                  conversation_id,
                  role,
+                 type,
                  content,
                  status,
                  created_at,
                  updated_at
              )
-             VALUES (?, ?, ?, ?, ${nowExpression}, ${nowExpression})`,
+             VALUES (?, ?, ?, ?, ?, ${nowExpression}, ${nowExpression})`,
             conversationId,
             role,
+            type,
             content,
             status,
         );
@@ -87,7 +90,7 @@ function createSoloChatConversationService(db) {
 
     async function getMessageById(messageId) {
         const message = await db.get(
-            `SELECT id, conversation_id, role, content, status, created_at, updated_at
+            `SELECT id, conversation_id, role, type, content, status, created_at, updated_at
              FROM solochat_messages
              WHERE id = ?`,
             messageId,
@@ -97,7 +100,7 @@ function createSoloChatConversationService(db) {
             return null;
         }
 
-        const [hydratedMessage] = await attachAttachments([message]);
+        const [hydratedMessage] = await hydrateMessages([message]);
         return hydratedMessage;
     }
 
@@ -122,13 +125,34 @@ function createSoloChatConversationService(db) {
         );
     }
 
-    async function updateMessage({ messageId, content, status }) {
+    async function updateMessage({ messageId, content, status, type }) {
+        const updates = [];
+        const values = [];
+
+        if (content !== undefined) {
+            updates.push("content = ?");
+            values.push(content);
+        }
+
+        if (status !== undefined) {
+            updates.push("status = ?");
+            values.push(status);
+        }
+
+        if (type !== undefined) {
+            updates.push("type = ?");
+            values.push(type);
+        }
+
+        if (!updates.length) {
+            return getMessageById(messageId);
+        }
+
         await db.run(
             `UPDATE solochat_messages
-             SET content = ?, status = ?, updated_at = ${nowExpression}
+             SET ${updates.join(", ")}, updated_at = ${nowExpression}
              WHERE id = ?`,
-            content,
-            status,
+            ...values,
             messageId,
         );
 
@@ -150,6 +174,11 @@ function createSoloChatConversationService(db) {
         );
 
         return result.changes;
+    }
+
+    async function hydrateMessages(messages) {
+        const messagesWithAttachments = await attachAttachments(messages);
+        return attachGradingSummaries(messagesWithAttachments);
     }
 
     async function attachAttachments(messages) {
@@ -180,6 +209,67 @@ function createSoloChatConversationService(db) {
         return messages.map((message) => ({
             ...message,
             attachments: attachmentsByMessageId.get(message.id) || [],
+        }));
+    }
+
+    async function attachGradingSummaries(messages) {
+        if (!messages.length) {
+            return [];
+        }
+
+        const gradingMessages = messages.filter(
+            (message) => (message.type || "text") === "grading",
+        );
+
+        if (!gradingMessages.length) {
+            return messages.map((message) => ({
+                ...message,
+                type: message.type || "text",
+                grading: null,
+            }));
+        }
+
+        const messageIds = gradingMessages.map((message) => message.id);
+        const placeholders = messageIds.map(() => "?").join(", ");
+        const tasks = await db.all(
+            `SELECT id, conversation_id, user_id, message_id, prompt_text, status, error_message, selected_image_count, created_at, started_at, completed_at
+             FROM solochat_grading_tasks
+             WHERE message_id IN (${placeholders})`,
+            ...messageIds,
+        );
+        const taskIds = tasks.map((task) => task.id);
+        const counts = taskIds.length
+            ? await db.all(
+                  `SELECT task_id, COUNT(*) AS count
+                   FROM solochat_grading_annotations
+                   WHERE task_id IN (${taskIds.map(() => "?").join(", ")})
+                   GROUP BY task_id`,
+                  ...taskIds,
+              )
+            : [];
+        const countByTaskId = new Map(
+            counts.map((row) => [row.task_id, Number(row.count || 0)]),
+        );
+        const taskByMessageId = new Map(
+            tasks.map((task) => [
+                task.message_id,
+                {
+                    taskId: String(task.id),
+                    status: task.status,
+                    errorMessage: task.error_message,
+                    selectedImageCount: Number(task.selected_image_count || 0),
+                    annotationCount: Number(countByTaskId.get(task.id) || 0),
+                },
+            ]),
+        );
+
+        return messages.map((message) => ({
+            ...message,
+            type: message.type || "text",
+            grading:
+                (message.type || "text") === "grading"
+                    ? taskByMessageId.get(message.id) || null
+                    : null,
         }));
     }
 

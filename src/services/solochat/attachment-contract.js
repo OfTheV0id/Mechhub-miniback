@@ -29,6 +29,15 @@ const SOLOCHAT_DOCUMENT_EXTENSIONS = new Set([
     "sql",
 ]);
 
+const SOLOCHAT_IMAGE_EXTENSIONS = new Set([
+    "png",
+    "jpg",
+    "jpeg",
+    "webp",
+    "gif",
+    "bmp",
+]);
+
 const SOLOCHAT_DOCUMENT_MIME_TYPES = new Set([
     "text/plain",
     "text/markdown",
@@ -64,6 +73,10 @@ function normalizeExtension(fileName) {
 
 function isSoloChatImageMimeType(mimeType) {
     return normalizeMimeType(mimeType).startsWith("image/");
+}
+
+function isSoloChatImageFileName(fileName) {
+    return SOLOCHAT_IMAGE_EXTENSIONS.has(normalizeExtension(fileName));
 }
 
 function isSoloChatDocumentMimeType(mimeType) {
@@ -106,6 +119,7 @@ module.exports = {
     buildSoloChatAttachmentUrl,
     buildSoloChatPreviewTextUrl,
     isAllowedSoloChatDocument,
+    isSoloChatImageFileName,
     isSoloChatDocumentFileName,
     isSoloChatDocumentMimeType,
     isSoloChatImageMimeType,

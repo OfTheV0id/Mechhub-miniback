@@ -134,6 +134,7 @@ async function ensureSoloChatTables(db) {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             conversation_id INTEGER NOT NULL,
             role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+            type TEXT NOT NULL DEFAULT 'text' CHECK (type IN ('text', 'grading')),
             content TEXT NOT NULL,
             status TEXT NOT NULL CHECK (status IN ('streaming', 'completed', 'failed')),
             created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
@@ -176,6 +177,135 @@ async function ensureSoloChatTables(db) {
     await db.exec(`
         CREATE INDEX IF NOT EXISTS idx_solochat_images_message_id
         ON solochat_images(message_id)
+    `);
+
+    await db.exec(`
+        CREATE TABLE IF NOT EXISTS solochat_grading_tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            message_id INTEGER DEFAULT NULL,
+            prompt_text TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+            error_message TEXT DEFAULT NULL,
+            selected_image_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
+            started_at TEXT DEFAULT NULL,
+            completed_at TEXT DEFAULT NULL,
+            FOREIGN KEY (conversation_id) REFERENCES solochat_conversations(id) ON DELETE CASCADE,
+            FOREIGN KEY (message_id) REFERENCES solochat_messages(id) ON DELETE SET NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+    `);
+
+    await db.exec(`
+        CREATE TABLE IF NOT EXISTS solochat_grading_task_files (
+            task_id INTEGER NOT NULL,
+            file_id INTEGER NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('image', 'context')),
+            PRIMARY KEY (task_id, file_id),
+            FOREIGN KEY (task_id) REFERENCES solochat_grading_tasks(id) ON DELETE CASCADE,
+            FOREIGN KEY (file_id) REFERENCES uploaded_files(id) ON DELETE CASCADE
+        );
+    `);
+
+    await db.exec(`
+        CREATE TABLE IF NOT EXISTS solochat_grading_annotations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            file_id INTEGER NOT NULL,
+            page_index INTEGER NOT NULL DEFAULT 0,
+            order_index INTEGER NOT NULL DEFAULT 0,
+            bbox_x REAL NOT NULL,
+            bbox_y REAL NOT NULL,
+            bbox_width REAL NOT NULL,
+            bbox_height REAL NOT NULL,
+            recognized_text TEXT NOT NULL DEFAULT '',
+            recognized_formula TEXT NOT NULL DEFAULT '',
+            commentary TEXT NOT NULL DEFAULT '',
+            severity TEXT NOT NULL CHECK (severity IN ('correct', 'warning', 'error', 'note')),
+            FOREIGN KEY (task_id) REFERENCES solochat_grading_tasks(id) ON DELETE CASCADE,
+            FOREIGN KEY (file_id) REFERENCES uploaded_files(id) ON DELETE CASCADE
+        );
+    `);
+
+    await db.exec(`
+        CREATE TABLE IF NOT EXISTS solochat_grading_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+            error_message TEXT DEFAULT NULL,
+            created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
+            FOREIGN KEY (task_id) REFERENCES solochat_grading_tasks(id) ON DELETE CASCADE
+        );
+    `);
+
+    await db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_solochat_grading_tasks_conversation
+        ON solochat_grading_tasks(conversation_id, created_at DESC, id DESC)
+    `);
+
+    await db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_solochat_grading_tasks_user
+        ON solochat_grading_tasks(user_id, created_at DESC, id DESC)
+    `);
+
+    await db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_solochat_grading_task_files_task
+        ON solochat_grading_task_files(task_id, file_id)
+    `);
+
+    await db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_solochat_grading_annotations_task
+        ON solochat_grading_annotations(task_id, file_id, page_index, order_index)
+    `);
+
+    await db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_solochat_grading_runs_task
+        ON solochat_grading_runs(task_id, created_at DESC, id DESC)
+    `);
+
+    await db.run(
+        `UPDATE solochat_grading_tasks
+         SET status = 'failed',
+             error_message = COALESCE(error_message, 'Grading interrupted by server restart'),
+             completed_at = COALESCE(completed_at, (${SQLITE_NOW_ISO_EXPRESSION}))
+         WHERE status = 'processing'`,
+    );
+
+    await db.run(
+        `UPDATE solochat_grading_runs
+         SET status = 'failed',
+             error_message = COALESCE(error_message, 'Grading interrupted by server restart')
+         WHERE status = 'processing'`,
+    );
+
+    const messageColumns = await db.all(`PRAGMA table_info(solochat_messages)`);
+    const messageColumnNames = new Set(
+        messageColumns.map((column) => column.name),
+    );
+    if (!messageColumnNames.has("type")) {
+        await db.exec(
+            `ALTER TABLE solochat_messages ADD COLUMN type TEXT NOT NULL DEFAULT 'text'`,
+        );
+    }
+
+    const gradingTaskColumns = await db.all(
+        `PRAGMA table_info(solochat_grading_tasks)`,
+    );
+    const gradingTaskColumnNames = new Set(
+        gradingTaskColumns.map((column) => column.name),
+    );
+    if (!gradingTaskColumnNames.has("message_id")) {
+        await db.exec(
+            `ALTER TABLE solochat_grading_tasks ADD COLUMN message_id INTEGER DEFAULT NULL REFERENCES solochat_messages(id)`,
+        );
+    }
+
+    await db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_solochat_grading_tasks_message
+        ON solochat_grading_tasks(message_id)
+        WHERE message_id IS NOT NULL
     `);
 }
 

@@ -14,6 +14,10 @@ const {
 const {
     buildSoloChatAttachmentUrl,
 } = require("../services/solochat/attachment-contract");
+const {
+    createSoloChatGradingService,
+    sanitizeTaskAttachment,
+} = require("../services/solochat/grading-service");
 
 const MAX_SOLOCHAT_ATTACHMENTS = 4;
 const solochatUpload = multer({
@@ -91,6 +95,20 @@ function parseTitle(value) {
     }
 
     return title;
+}
+
+function parseGradingTaskId(value) {
+    const taskId = Number(value);
+
+    if (!Number.isInteger(taskId) || taskId <= 0) {
+        throw badRequest("A valid taskId is required");
+    }
+
+    return taskId;
+}
+
+function parsePromptText(value) {
+    return typeof value === "string" ? value.trim() : "";
 }
 
 function buildInlineContentDisposition(fileName) {
@@ -250,11 +268,21 @@ function sanitizeMessage(message) {
         id: serializeId(message.id),
         conversationId: serializeId(message.conversation_id),
         role: message.role,
+        type: message.type || "text",
         content: message.content,
         status: message.status,
         attachments: (message.attachments || []).map(sanitizeAttachment),
         createdAt: toIsoTimestamp(message.created_at),
         updatedAt: toIsoTimestamp(message.updated_at),
+        grading: message.grading
+            ? {
+                  taskId: serializeId(message.grading.taskId),
+                  status: message.grading.status,
+                  errorMessage: message.grading.errorMessage,
+                  selectedImageCount: message.grading.selectedImageCount,
+                  annotationCount: message.grading.annotationCount,
+              }
+            : null,
     };
 }
 
@@ -267,6 +295,29 @@ function sanitizeTextPreviewResponse(attachment, preview) {
         textContent: preview.textContent,
         truncated: preview.truncated,
         maxChars: preview.maxChars,
+    };
+}
+
+function sanitizeGradingTaskSummary(task) {
+    return {
+        id: task.id,
+        conversationId: task.conversationId,
+        status: task.status,
+        promptText: task.promptText,
+        errorMessage: task.errorMessage,
+        selectedImageCount: task.selectedImageCount,
+        annotationCount: task.annotationCount,
+        createdAt: task.createdAt,
+        startedAt: task.startedAt,
+        completedAt: task.completedAt,
+    };
+}
+
+function sanitizeGradingTaskDetail(task) {
+    return {
+        ...sanitizeGradingTaskSummary(task),
+        attachments: (task.attachments || []).map(sanitizeTaskAttachment),
+        annotations: task.annotations || [],
     };
 }
 
@@ -288,13 +339,19 @@ async function deleteStoredAttachments(attachments) {
     );
 }
 
-function createSoloChatRouter(db) {
+function createSoloChatRouter(db, options = {}) {
     const router = express.Router();
     const conversationService = createSoloChatConversationService(db);
     const fileService = createFileService(db);
     const aiService = createSoloChatAiService({
         db,
         attachmentService: fileService,
+    });
+    const gradingService = createSoloChatGradingService({
+        db,
+        gradingEventsHub: options.gradingEventsHub,
+        fileService,
+        conversationService,
     });
 
     router.get("/conversations", async (req, res, next) => {
@@ -317,6 +374,42 @@ function createSoloChatRouter(db) {
             });
 
             return res.status(201).json(sanitizeConversation(conversation));
+        } catch (error) {
+            return next(error);
+        }
+    });
+
+    router.get("/grading-tasks/:taskId/events", async (req, res, next) => {
+        try {
+            const userId = requireUserId(req);
+            const taskId = parseGradingTaskId(req.params.taskId);
+
+            if (!options.gradingEventsHub) {
+                throw notFound("Grading events hub is not available");
+            }
+
+            const gradingMessage =
+                await gradingService.getGradingMessageForTaskForUser({
+                taskId,
+                userId,
+                });
+
+            res.setHeader("Content-Type", "text/event-stream");
+            res.setHeader("Cache-Control", "no-cache, no-transform");
+            res.setHeader("Connection", "keep-alive");
+            res.flushHeaders();
+
+            const unsubscribe = options.gradingEventsHub.subscribe(
+                String(taskId),
+                String(userId),
+                res,
+            );
+            options.gradingEventsHub.sendEvent(res, {
+                type: "grading_status",
+                message: sanitizeMessage(gradingMessage),
+            });
+            req.on("close", unsubscribe);
+            req.on("aborted", unsubscribe);
         } catch (error) {
             return next(error);
         }
@@ -436,6 +529,109 @@ function createSoloChatRouter(db) {
             }
 
             return res.status(204).end();
+        } catch (error) {
+            return next(error);
+        }
+    });
+
+    router.post(
+        "/conversations/:conversationId/grading-tasks",
+        async (req, res, next) => {
+            try {
+                const userId = requireUserId(req);
+                const conversationId = parseConversationId(
+                    req.params.conversationId,
+                );
+
+                if (!req.is("multipart/form-data")) {
+                    throw unsupportedMediaType(
+                        "Content-Type must be multipart/form-data",
+                    );
+                }
+
+                await parseSoloChatUpload(req, res);
+                const uploadedFiles = normalizeMultipartFiles(req.files);
+                const promptText = parsePromptText(req.body?.promptText);
+
+                const { userMessage, gradingMessage } =
+                    await gradingService.createTask({
+                    conversationId,
+                    userId,
+                    promptText,
+                    uploadedFiles,
+                });
+
+                res.status(201);
+                res.setHeader(
+                    "Content-Type",
+                    "application/x-ndjson; charset=utf-8",
+                );
+                res.setHeader("Cache-Control", "no-cache, no-transform");
+                res.setHeader("Connection", "keep-alive");
+                res.flushHeaders();
+
+                writeStreamEvent(res, {
+                    type: "user_input",
+                    message: sanitizeMessage(userMessage),
+                });
+                writeStreamEvent(res, {
+                    type: "grading_start",
+                    message: sanitizeMessage(gradingMessage),
+                });
+                return res.end();
+            } catch (error) {
+                return next(error);
+            }
+        },
+    );
+
+    router.get(
+        "/conversations/:conversationId/grading-tasks",
+        async (req, res, next) => {
+            try {
+                const userId = requireUserId(req);
+                const conversationId = parseConversationId(
+                    req.params.conversationId,
+                );
+                const tasks = await gradingService.listTasksForConversation({
+                    conversationId,
+                    userId,
+                });
+
+                return res.json(tasks.map(sanitizeGradingTaskSummary));
+            } catch (error) {
+                return next(error);
+            }
+        },
+    );
+
+    router.get("/grading-tasks/:taskId", async (req, res, next) => {
+        try {
+            const userId = requireUserId(req);
+            const taskId = parseGradingTaskId(req.params.taskId);
+            const task = await gradingService.getTaskDetailForUser({
+                taskId,
+                userId,
+            });
+
+            return res.json(sanitizeGradingTaskDetail(task));
+        } catch (error) {
+            return next(error);
+        }
+    });
+
+    router.post("/grading-tasks/:taskId/retry", async (req, res, next) => {
+        try {
+            const userId = requireUserId(req);
+            const taskId = parseGradingTaskId(req.params.taskId);
+            const task = await gradingService.retryTask({
+                taskId,
+                userId,
+            });
+
+            return res.json({
+                task: sanitizeGradingTaskSummary(task),
+            });
         } catch (error) {
             return next(error);
         }
