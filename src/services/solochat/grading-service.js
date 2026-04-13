@@ -4,7 +4,16 @@ const { toIsoTimestamp } = require("../../lib/time");
 const { createFileService } = require("../uploads/file-service");
 const { createSoloChatConversationService } = require("./conversation-service");
 const { createOpenAiCompatibleClient } = require("./openai-client");
+const {
+    generateConversationTitle,
+    generateGradingTitle,
+} = require("./ai-service");
 const { buildSoloChatAttachmentUrl } = require("./attachment-contract");
+const {
+    normalizeCommentaryText,
+    normalizeFormulaText,
+    normalizeRenderableMessageContent,
+} = require("./math-normalizer");
 
 const CONTEXT_TEXT_MAX_CHARS = 12000;
 const ALLOWED_SEVERITIES = new Set(["correct", "warning", "error", "note"]);
@@ -12,7 +21,16 @@ const GRADING_PROMPT = `
 You are grading a student's subjective-answer homework submission.
 Return JSON object stream only. Do not include markdown fences or any extra text.
 You may receive optional question text, optional context documents, and multiple homework images.
-Choose which images actually need annotations.
+All explanatory output must be written in Simplified Chinese.
+The commentary field must be written in Simplified Chinese.
+Do not write English commentary or extra English explanations.
+The recognizedFormula field must be KaTeX/LaTeX-compatible.
+Do not use Unicode math symbols such as ⇒, →, −, ≤, ≥, ≠, ×, · in recognizedFormula.
+Use LaTeX commands such as \\Rightarrow, \\to, -, \\le, \\ge, \\ne, \\times, \\cdot instead.
+When commentary contains mathematical expressions, use KaTeX/LaTeX-compatible syntax and avoid Unicode math symbols.
+You must inspect every uploaded image.
+Be exhaustive across all uploaded images and return every issue that should be annotated.
+Do not stop after the first useful annotation.
 Emit one annotation object at a time.
 You may format each JSON object with whitespace and newlines, but output only complete JSON objects and nothing else.
 Do not wrap annotations in an array.
@@ -26,9 +44,11 @@ Every annotation object must include:
 - recognizedFormula: string
 - commentary: string
 - severity: one of correct, warning, error, note
-If an image does not need annotation, omit it.
+If an image does not need annotation, omit it for that image only.
 If there are no useful annotations, output nothing.
 `.trim();
+
+const MIN_BBOX_SIZE = 0.001;
 
 function badRequest(message) {
     const error = new Error(message);
@@ -76,14 +96,16 @@ function createSoloChatGradingService(options = {}) {
         let task = null;
         let userMessage = null;
         let gradingMessage = null;
+        let updatedConversation = null;
         let createdFiles = [];
+        let conversation = null;
 
         try {
             await withImmediateTransaction(async (txDb) => {
                 const txConversationService =
                     createSoloChatConversationService(txDb);
                 const txFileService = createFileService(txDb);
-                const conversation =
+                conversation =
                     await txConversationService.getConversationForUser({
                         conversationId,
                         userId,
@@ -146,6 +168,7 @@ function createSoloChatGradingService(options = {}) {
                          user_id,
                          message_id,
                          prompt_text,
+                         generated_title,
                          status,
                          error_message,
                          selected_image_count,
@@ -153,7 +176,7 @@ function createSoloChatGradingService(options = {}) {
                          started_at,
                          completed_at
                      )
-                     VALUES (?, ?, ?, ?, 'pending', NULL, ?, CURRENT_TIMESTAMP, NULL, NULL)`,
+                     VALUES (?, ?, ?, ?, NULL, 'pending', NULL, ?, CURRENT_TIMESTAMP, NULL, NULL)`,
                     conversationId,
                     userId,
                     gradingMessage.id,
@@ -198,6 +221,19 @@ function createSoloChatGradingService(options = {}) {
             throw error;
         }
 
+        const nextTitle = await generateConversationTitle({
+            conversation,
+            messages: [userMessage],
+            attachmentService: fileService,
+            client,
+        });
+        updatedConversation = nextTitle
+            ? await conversationService.updateConversationTitle({
+                  conversationId,
+                  title: nextTitle,
+              })
+            : await conversationService.getConversationById(conversationId);
+
         queueMicrotask(() => {
             void runTask(task.id);
         });
@@ -206,6 +242,7 @@ function createSoloChatGradingService(options = {}) {
             task,
             userMessage,
             gradingMessage,
+            conversation: updatedConversation,
         };
     }
 
@@ -247,8 +284,11 @@ function createSoloChatGradingService(options = {}) {
             throw notFound("Grading task not found");
         }
 
-        const attachments = await listTaskFiles(task.id);
+        const allAttachments = await listTaskFiles(task.id);
         const annotations = await listTaskAnnotations(task.id);
+        const attachments = allAttachments.filter(
+            (attachment) => attachment.role === "image",
+        );
 
         return {
             ...hydrateTaskSummary(task, new Map([[task.id, annotations.length]])),
@@ -272,6 +312,7 @@ function createSoloChatGradingService(options = {}) {
         await db.run(
             `UPDATE solochat_grading_tasks
              SET status = 'pending',
+                 generated_title = NULL,
                  error_message = NULL,
                  started_at = NULL,
                  completed_at = NULL
@@ -313,7 +354,7 @@ function createSoloChatGradingService(options = {}) {
         try {
             const processingTask = await withImmediateTransaction(async (txDb) => {
                 const task = await txDb.get(
-                    `SELECT id, conversation_id, user_id, message_id, prompt_text, status, error_message, selected_image_count, created_at, started_at, completed_at
+                    `SELECT id, conversation_id, user_id, message_id, prompt_text, generated_title, status, error_message, selected_image_count, created_at, started_at, completed_at
                      FROM solochat_grading_tasks
                      WHERE id = ?`,
                     Number(taskId),
@@ -409,6 +450,12 @@ function createSoloChatGradingService(options = {}) {
             }
 
             annotations.sort(compareAnnotations);
+            const generatedTitle = await generateGradingTitle({
+                promptText: processingTask.promptText,
+                annotations,
+                attachmentFileName: imageAttachments[0]?.file_name || "",
+                client,
+            });
 
             await withImmediateTransaction(async (txDb) => {
                 await txDb.run(
@@ -452,9 +499,11 @@ function createSoloChatGradingService(options = {}) {
                 await txDb.run(
                     `UPDATE solochat_grading_tasks
                      SET status = 'completed',
+                         generated_title = ?,
                          error_message = NULL,
                          completed_at = CURRENT_TIMESTAMP
                      WHERE id = ?`,
+                    generatedTitle || null,
                     Number(taskId),
                 );
 
@@ -502,7 +551,7 @@ function createSoloChatGradingService(options = {}) {
 
     async function listTaskSummariesByConversationId(conversationId) {
         const rows = await db.all(
-            `SELECT id, conversation_id, user_id, message_id, prompt_text, status, error_message, selected_image_count, created_at, started_at, completed_at
+            `SELECT id, conversation_id, user_id, message_id, prompt_text, generated_title, status, error_message, selected_image_count, created_at, started_at, completed_at
              FROM solochat_grading_tasks
              WHERE conversation_id = ?
              ORDER BY created_at DESC, id DESC`,
@@ -521,7 +570,7 @@ function createSoloChatGradingService(options = {}) {
 
     async function getTaskSummaryByIdWithDb(queryDb, taskId) {
         const row = await queryDb.get(
-            `SELECT id, conversation_id, user_id, message_id, prompt_text, status, error_message, selected_image_count, created_at, started_at, completed_at
+            `SELECT id, conversation_id, user_id, message_id, prompt_text, generated_title, status, error_message, selected_image_count, created_at, started_at, completed_at
              FROM solochat_grading_tasks
              WHERE id = ?`,
             taskId,
@@ -546,7 +595,7 @@ function createSoloChatGradingService(options = {}) {
 
     async function getTaskByIdForUser(taskId, userId) {
         return db.get(
-            `SELECT id, conversation_id, user_id, message_id, prompt_text, status, error_message, selected_image_count, created_at, started_at, completed_at
+            `SELECT id, conversation_id, user_id, message_id, prompt_text, generated_title, status, error_message, selected_image_count, created_at, started_at, completed_at
              FROM solochat_grading_tasks
              WHERE id = ? AND user_id = ?`,
             taskId,
@@ -608,8 +657,8 @@ function createSoloChatGradingService(options = {}) {
                 height: row.bbox_height,
             },
             recognizedText: row.recognized_text,
-            recognizedFormula: row.recognized_formula,
-            commentary: row.commentary,
+            recognizedFormula: normalizeFormulaText(row.recognized_formula),
+            commentary: normalizeCommentaryText(row.commentary),
             severity: row.severity,
         }));
     }
@@ -910,8 +959,8 @@ function normalizeAnnotation(annotation, fallbackOrderIndex, imageAttachments) {
         orderIndex,
         bbox,
         recognizedText: String(annotation.recognizedText || "").trim(),
-        recognizedFormula: String(annotation.recognizedFormula || "").trim(),
-        commentary: String(annotation.commentary || "").trim(),
+        recognizedFormula: normalizeFormulaText(annotation.recognizedFormula),
+        commentary: normalizeCommentaryText(annotation.commentary),
         severity,
     };
 }
@@ -931,22 +980,31 @@ function normalizeBbox(bbox) {
         throw badRequest("AI annotation bbox must contain numeric values");
     }
 
-    if (
-        x < 0 ||
-        y < 0 ||
-        width <= 0 ||
-        height <= 0 ||
-        x > 1 ||
-        y > 1 ||
-        width > 1 ||
-        height > 1 ||
-        x + width > 1 ||
-        y + height > 1
-    ) {
-        throw badRequest("AI annotation bbox must be normalized within 0 to 1");
+    if (width <= 0 || height <= 0) {
+        throw badRequest("AI annotation bbox must have positive width and height");
     }
 
-    return { x, y, width, height };
+    const normalizedX = clamp(x, 0, 1 - MIN_BBOX_SIZE);
+    const normalizedY = clamp(y, 0, 1 - MIN_BBOX_SIZE);
+    const normalizedWidth = Math.min(
+        clamp(width, MIN_BBOX_SIZE, 1),
+        1 - normalizedX,
+    );
+    const normalizedHeight = Math.min(
+        clamp(height, MIN_BBOX_SIZE, 1),
+        1 - normalizedY,
+    );
+
+    return {
+        x: normalizedX,
+        y: normalizedY,
+        width: normalizedWidth,
+        height: normalizedHeight,
+    };
+}
+
+function clamp(value, min, max) {
+    return Math.min(Math.max(value, min), max);
 }
 
 function compareAnnotations(left, right) {
@@ -988,6 +1046,7 @@ function hydrateTaskSummary(row, annotationCounts) {
         userId: serializeId(row.user_id),
         messageId: serializeId(row.message_id),
         promptText: row.prompt_text || "",
+        generatedTitle: row.generated_title || null,
         status: row.status,
         errorMessage: row.error_message,
         selectedImageCount: Number(row.selected_image_count || 0),
@@ -1019,11 +1078,16 @@ function buildGradingMessageContent(task) {
     }
 
     if (task.status === "completed") {
-        return "Grading completed";
+        return task.generatedTitle
+            ? `Grading completed - ${task.generatedTitle}`
+            : "Grading completed";
     }
 
     if (task.status === "failed") {
-        return "Grading failed";
+        const errorMessage = String(task.errorMessage || "").trim();
+        return errorMessage
+            ? `Grading failed - ${errorMessage}`
+            : "Grading failed";
     }
 
     return "Grading homework...";
@@ -1035,7 +1099,7 @@ function sanitizeStreamMessage(message) {
         conversationId: serializeId(message.conversation_id),
         role: message.role,
         type: message.type || "text",
-        content: message.content,
+        content: normalizeRenderableMessageContent(message.content),
         status: message.status,
         attachments: Array.isArray(message.attachments)
             ? message.attachments.map((attachment) => ({
@@ -1055,6 +1119,7 @@ function sanitizeStreamMessage(message) {
         grading: message.grading
             ? {
                   taskId: serializeId(message.grading.taskId),
+                  generatedTitle: message.grading.generatedTitle || null,
                   status: message.grading.status,
                   errorMessage: message.grading.errorMessage,
                   selectedImageCount: message.grading.selectedImageCount,

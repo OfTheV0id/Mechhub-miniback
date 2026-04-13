@@ -18,6 +18,9 @@ const {
     createSoloChatGradingService,
     sanitizeTaskAttachment,
 } = require("../services/solochat/grading-service");
+const {
+    normalizeRenderableMessageContent,
+} = require("../services/solochat/math-normalizer");
 
 const MAX_SOLOCHAT_ATTACHMENTS = 4;
 const solochatUpload = multer({
@@ -269,7 +272,7 @@ function sanitizeMessage(message) {
         conversationId: serializeId(message.conversation_id),
         role: message.role,
         type: message.type || "text",
-        content: message.content,
+        content: normalizeRenderableMessageContent(message.content),
         status: message.status,
         attachments: (message.attachments || []).map(sanitizeAttachment),
         createdAt: toIsoTimestamp(message.created_at),
@@ -277,6 +280,7 @@ function sanitizeMessage(message) {
         grading: message.grading
             ? {
                   taskId: serializeId(message.grading.taskId),
+                  generatedTitle: message.grading.generatedTitle || null,
                   status: message.grading.status,
                   errorMessage: message.grading.errorMessage,
                   selectedImageCount: message.grading.selectedImageCount,
@@ -304,6 +308,7 @@ function sanitizeGradingTaskSummary(task) {
         conversationId: task.conversationId,
         status: task.status,
         promptText: task.promptText,
+        generatedTitle: task.generatedTitle || null,
         errorMessage: task.errorMessage,
         selectedImageCount: task.selectedImageCount,
         annotationCount: task.annotationCount,
@@ -553,13 +558,13 @@ function createSoloChatRouter(db, options = {}) {
                 const uploadedFiles = normalizeMultipartFiles(req.files);
                 const promptText = parsePromptText(req.body?.promptText);
 
-                const { userMessage, gradingMessage } =
+                const { userMessage, gradingMessage, conversation } =
                     await gradingService.createTask({
-                    conversationId,
-                    userId,
-                    promptText,
-                    uploadedFiles,
-                });
+                        conversationId,
+                        userId,
+                        promptText,
+                        uploadedFiles,
+                    });
 
                 res.status(201);
                 res.setHeader(
@@ -577,6 +582,10 @@ function createSoloChatRouter(db, options = {}) {
                 writeStreamEvent(res, {
                     type: "grading_start",
                     message: sanitizeMessage(gradingMessage),
+                });
+                writeStreamEvent(res, {
+                    type: "conversation_title",
+                    conversation: sanitizeConversation(conversation),
                 });
                 return res.end();
             } catch (error) {

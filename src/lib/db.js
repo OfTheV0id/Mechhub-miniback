@@ -186,6 +186,7 @@ async function ensureSoloChatTables(db) {
             user_id INTEGER NOT NULL,
             message_id INTEGER DEFAULT NULL,
             prompt_text TEXT NOT NULL DEFAULT '',
+            generated_title TEXT DEFAULT NULL,
             status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
             error_message TEXT DEFAULT NULL,
             selected_image_count INTEGER NOT NULL DEFAULT 0,
@@ -299,6 +300,12 @@ async function ensureSoloChatTables(db) {
     if (!gradingTaskColumnNames.has("message_id")) {
         await db.exec(
             `ALTER TABLE solochat_grading_tasks ADD COLUMN message_id INTEGER DEFAULT NULL REFERENCES solochat_messages(id)`,
+        );
+    }
+
+    if (!gradingTaskColumnNames.has("generated_title")) {
+        await db.exec(
+            `ALTER TABLE solochat_grading_tasks ADD COLUMN generated_title TEXT DEFAULT NULL`,
         );
     }
 

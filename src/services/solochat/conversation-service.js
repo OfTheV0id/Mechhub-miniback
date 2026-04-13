@@ -161,7 +161,8 @@ function createSoloChatConversationService(db) {
 
     async function deleteConversation({ conversationId, userId }) {
         await db.run(
-            `DELETE FROM solochat_messages
+            `UPDATE solochat_grading_tasks
+             SET message_id = NULL
              WHERE conversation_id = ?`,
             conversationId,
         );
@@ -232,7 +233,7 @@ function createSoloChatConversationService(db) {
         const messageIds = gradingMessages.map((message) => message.id);
         const placeholders = messageIds.map(() => "?").join(", ");
         const tasks = await db.all(
-            `SELECT id, conversation_id, user_id, message_id, prompt_text, status, error_message, selected_image_count, created_at, started_at, completed_at
+            `SELECT id, conversation_id, user_id, message_id, prompt_text, generated_title, status, error_message, selected_image_count, created_at, started_at, completed_at
              FROM solochat_grading_tasks
              WHERE message_id IN (${placeholders})`,
             ...messageIds,
@@ -255,6 +256,7 @@ function createSoloChatConversationService(db) {
                 task.message_id,
                 {
                     taskId: String(task.id),
+                    generatedTitle: task.generated_title,
                     status: task.status,
                     errorMessage: task.error_message,
                     selectedImageCount: Number(task.selected_image_count || 0),

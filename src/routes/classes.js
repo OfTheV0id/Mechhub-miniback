@@ -257,10 +257,15 @@ function createClassesRouter(db, { classEventsHub }) {
         targets,
         reason,
         extraUserIds = [],
+        excludeUserIds = [],
     }) {
         const memberUserIds = await classService.listMemberUserIds(classId);
+        const excludedUserIds = new Set(excludeUserIds.filter(Boolean));
+        const targetUserIds = [...memberUserIds, ...extraUserIds].filter(
+            (userId) => !excludedUserIds.has(userId),
+        );
 
-        classEventsHub.emitToUsers([...memberUserIds, ...extraUserIds], {
+        classEventsHub.emitToUsers(targetUserIds, {
             type: "class.invalidate",
             classId: String(classId),
             targets,
@@ -312,6 +317,7 @@ function createClassesRouter(db, { classEventsHub }) {
                 targets: ["classes", "classDetail", "members"],
                 reason: "class_created",
                 extraUserIds: [userId],
+                excludeUserIds: [userId],
             });
 
             return res
@@ -368,6 +374,7 @@ function createClassesRouter(db, { classEventsHub }) {
                 classId: classRecord.id,
                 targets: ["members"],
                 reason: "member_joined",
+                excludeUserIds: [userId],
             });
 
             return res
@@ -466,6 +473,7 @@ function createClassesRouter(db, { classEventsHub }) {
                 classId,
                 targets: ["classes", "classDetail"],
                 reason: "class_updated",
+                excludeUserIds: [userId],
             });
 
             return res.json(
@@ -519,6 +527,7 @@ function createClassesRouter(db, { classEventsHub }) {
                 classId,
                 targets: ["classes", "classDetail"],
                 reason: "avatar_updated",
+                excludeUserIds: [userId],
             });
 
             return res.status(200).json(
@@ -552,6 +561,7 @@ function createClassesRouter(db, { classEventsHub }) {
                 classId,
                 targets: ["classes", "classDetail"],
                 reason: "avatar_removed",
+                excludeUserIds: [userId],
             });
 
             return res.status(204).end();
@@ -620,6 +630,7 @@ function createClassesRouter(db, { classEventsHub }) {
                 targets: ["members"],
                 reason: "member_left",
                 extraUserIds: [userId],
+                excludeUserIds: [userId],
             });
             return res.status(204).end();
         } catch (error) {
@@ -695,6 +706,7 @@ function createClassesRouter(db, { classEventsHub }) {
                 targets: ["members"],
                 reason: "member_role_updated",
                 extraUserIds: [member.user_id],
+                excludeUserIds: [userId],
             });
 
             return res.json(
@@ -742,6 +754,7 @@ function createClassesRouter(db, { classEventsHub }) {
                 targets: ["members"],
                 reason: "member_removed",
                 extraUserIds: [member.user_id],
+                excludeUserIds: [userId],
             });
             return res.status(204).end();
         } catch (error) {

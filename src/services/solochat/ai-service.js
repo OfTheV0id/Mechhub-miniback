@@ -1,10 +1,26 @@
 const { createOpenAiCompatibleClient } = require("./openai-client");
+const {
+    createMarkdownMathStreamNormalizer,
+} = require("./math-normalizer");
 
 const TITLE_MAX_LENGTH = 60;
+const SOLOCHAT_SYSTEM_PROMPT = `
+Your name is MechHub SoloChat.
+When you write mathematical expressions, use KaTeX/LaTeX-compatible syntax.
+Do not use Unicode math symbols such as ⇒, →, −, ≤, ≥, ≠, ×, · in formulas.
+Prefer LaTeX commands such as \\Rightarrow, \\to, -, \\le, \\ge, \\ne, \\times, \\cdot.
+`.trim();
 const TITLE_PROMPT =
     "请根据用户的首发消息生成一个简短自然的中文对话标题。标题要概括实际主题，不要返回“对话标题生成”“聊天标题”“会话标题”“新对话”这类泛化标题。只返回标题本身，不加引号，不超过10个字。";
 const TITLE_TEXT_LIMIT = 200;
 const TITLE_DOCUMENT_TEXT_LIMIT = 800;
+const GRADING_TITLE_PROMPT = `
+Generate a short natural Chinese title for a homework grading result.
+The title should summarize the grading topic or result itself, not the chat session.
+Return only the title text.
+Do not add markdown, labels, or quotation marks.
+Keep it within 30 Chinese characters.
+`.trim();
 const GENERIC_TITLES = new Set([
     "标题",
     "中文标题",
@@ -37,6 +53,7 @@ function createSoloChatAiService(options = {}) {
         signal,
     }) {
         let assistantContent = "";
+        const streamNormalizer = createMarkdownMathStreamNormalizer();
         const replyMessages = await buildReplyMessages(
             messages,
             attachmentService,
@@ -47,43 +64,32 @@ function createSoloChatAiService(options = {}) {
             temperature: 0.6,
             signal,
         })) {
-            assistantContent += delta;
+            const normalizedDelta = streamNormalizer.pushChunk(delta);
+            assistantContent += normalizedDelta;
+
+            if (onDelta && normalizedDelta) {
+                await onDelta(normalizedDelta);
+            }
+        }
+
+        const trailingDelta = streamNormalizer.finish();
+        if (trailingDelta) {
+            assistantContent += trailingDelta;
 
             if (onDelta) {
-                await onDelta(delta);
+                await onDelta(trailingDelta);
             }
         }
 
-        let nextTitle = null;
-
-        if (signal?.aborted) {
-            return {
-                assistantContent: assistantContent.trim(),
-                nextTitle,
-            };
-        }
-
-        if (conversation.title === "New Chat") {
-            try {
-                nextTitle = normalizeTitle(
-                    await client.createChatCompletion({
-                        messages: await buildTitleMessages(
-                            messages,
-                            attachmentService,
-                        ),
-                        temperature: 0.2,
-                        maxTokens: 24,
-                        signal,
-                    }),
-                );
-
-                if (!nextTitle) {
-                    nextTitle = buildFallbackTitle(messages);
-                }
-            } catch (error) {
-                nextTitle = buildFallbackTitle(messages);
-            }
-        }
+        const nextTitle = signal?.aborted
+            ? null
+            : await generateConversationTitle({
+                  conversation,
+                  messages,
+                  attachmentService,
+                  client,
+                  signal,
+              });
 
         return {
             assistantContent: assistantContent.trim(),
@@ -96,11 +102,77 @@ function createSoloChatAiService(options = {}) {
     };
 }
 
+async function generateConversationTitle({
+    conversation,
+    messages,
+    attachmentService,
+    client = createOpenAiCompatibleClient(),
+    signal,
+}) {
+    if (signal?.aborted || conversation?.title !== "New Chat") {
+        return null;
+    }
+
+    try {
+        const nextTitle = normalizeTitle(
+            await client.createChatCompletion({
+                messages: await buildTitleMessages(messages, attachmentService),
+                temperature: 0.2,
+                maxTokens: 24,
+                signal,
+            }),
+        );
+
+        if (nextTitle) {
+            return nextTitle;
+        }
+
+        return buildFallbackTitle(messages);
+    } catch (error) {
+        return buildFallbackTitle(messages);
+    }
+}
+
+async function generateGradingTitle({
+    promptText = "",
+    annotations = [],
+    attachmentFileName = "",
+    client = createOpenAiCompatibleClient(),
+    signal,
+}) {
+    try {
+        const nextTitle = normalizeTitle(
+            await client.createChatCompletion({
+                messages: buildGradingTitleMessages({
+                    promptText,
+                    annotations,
+                    attachmentFileName,
+                }),
+                temperature: 0.2,
+                maxTokens: 24,
+                signal,
+            }),
+        );
+
+        if (nextTitle) {
+            return truncateText(nextTitle, TITLE_MAX_LENGTH);
+        }
+    } catch (_error) {
+        // Fall through to fallback.
+    }
+
+    return buildFallbackGradingTitle({
+        promptText,
+        annotations,
+        attachmentFileName,
+    });
+}
+
 async function buildReplyMessages(messages, attachmentService) {
     const replyMessages = [
         {
             role: "system",
-            content: "Your name is MechHub SoloChat.",
+            content: SOLOCHAT_SYSTEM_PROMPT,
         },
     ];
 
@@ -112,6 +184,59 @@ async function buildReplyMessages(messages, attachmentService) {
     }
 
     return replyMessages;
+}
+
+function buildGradingTitleMessages({
+    promptText,
+    annotations,
+    attachmentFileName,
+}) {
+    const parts = [];
+    const normalizedPromptText = normalizeWhitespace(promptText);
+    const normalizedFileName = normalizeWhitespace(attachmentFileName);
+
+    if (normalizedPromptText) {
+        parts.push(`Question prompt: ${truncateText(normalizedPromptText, 200)}`);
+    }
+
+    if (normalizedFileName) {
+        parts.push(`Attachment: ${normalizedFileName}`);
+    }
+
+    const annotationSummary = (Array.isArray(annotations) ? annotations : [])
+        .slice(0, 5)
+        .map((annotation, index) => {
+            const severity = normalizeWhitespace(annotation?.severity || "");
+            const commentary = truncateText(annotation?.commentary, 140);
+            const recognizedText = truncateText(annotation?.recognizedText, 80);
+
+            return [
+                `#${index + 1}`,
+                severity ? `[${severity}]` : "",
+                commentary,
+                recognizedText ? `text: ${recognizedText}` : "",
+            ]
+                .filter(Boolean)
+                .join(" ");
+        })
+        .filter(Boolean);
+
+    if (annotationSummary.length) {
+        parts.push(`Annotations:\n${annotationSummary.join("\n")}`);
+    }
+
+    return [
+        {
+            role: "system",
+            content: GRADING_TITLE_PROMPT,
+        },
+        {
+            role: "user",
+            content: parts.length
+                ? parts.join("\n\n")
+                : "No grading context was provided.",
+        },
+    ];
 }
 
 async function buildMessageContent(message, attachmentService) {
@@ -302,6 +427,38 @@ function buildFallbackTitle(messages) {
     return "新对话";
 }
 
+function buildFallbackGradingTitle({
+    promptText,
+    annotations,
+    attachmentFileName,
+}) {
+    const fallbackFromPrompt = buildFallbackTitleFromText(promptText);
+    if (fallbackFromPrompt) {
+        return fallbackFromPrompt;
+    }
+
+    const fallbackFromCommentary = buildFallbackTitleFromText(
+        Array.isArray(annotations) && annotations.length
+            ? annotations[0]?.commentary
+            : "",
+    );
+    if (fallbackFromCommentary) {
+        return fallbackFromCommentary;
+    }
+
+    const fallbackFromAttachment = normalizeTitle(
+        truncateText(
+            normalizeWhitespace(attachmentFileName).replace(/\.[^.]+$/, ""),
+            12,
+        ),
+    );
+    if (fallbackFromAttachment) {
+        return fallbackFromAttachment;
+    }
+
+    return "作业批改结果";
+}
+
 function buildFallbackTitleFromText(value) {
     const normalized = normalizeWhitespace(value);
 
@@ -385,4 +542,6 @@ function truncateText(value, limit) {
 
 module.exports = {
     createSoloChatAiService,
+    generateConversationTitle,
+    generateGradingTitle,
 };
