@@ -81,7 +81,19 @@ function serializeId(value) {
 function createSoloChatGradingService(options = {}) {
     const db = options.db;
     const gradingEventsHub = options.gradingEventsHub;
-    const client = options.client || createOpenAiCompatibleClient();
+    const gradingClient =
+        options.client ||
+        createOpenAiCompatibleClient({
+            defaultModel:
+                process.env.OPENAI_GRADING_MODEL ||
+                process.env.OPENAI_MODEL,
+        });
+    const titleClient =
+        options.titleClient ||
+        createOpenAiCompatibleClient({
+            defaultModel:
+                process.env.OPENAI_CHAT_MODEL || process.env.OPENAI_MODEL,
+        });
     const fileService = options.fileService || createFileService(db);
     const conversationService =
         options.conversationService || createSoloChatConversationService(db);
@@ -225,7 +237,7 @@ function createSoloChatGradingService(options = {}) {
             conversation,
             messages: [userMessage],
             attachmentService: fileService,
-            client,
+            client: titleClient,
         });
         updatedConversation = nextTitle
             ? await conversationService.updateConversationTitle({
@@ -416,7 +428,7 @@ function createSoloChatGradingService(options = {}) {
                 imageAttachments,
             );
 
-            for await (const delta of client.streamChatCompletion({
+            for await (const delta of gradingClient.streamChatCompletion({
                 messages: await buildGradingMessages({
                     promptText: processingTask.promptText,
                     imageAttachments,
@@ -454,7 +466,7 @@ function createSoloChatGradingService(options = {}) {
                 promptText: processingTask.promptText,
                 annotations,
                 attachmentFileName: imageAttachments[0]?.file_name || "",
-                client,
+                client: titleClient,
             });
 
             await withImmediateTransaction(async (txDb) => {

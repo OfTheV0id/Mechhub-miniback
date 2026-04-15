@@ -1,7 +1,9 @@
-function createOpenAiCompatibleClient() {
+function createOpenAiCompatibleClient(options = {}) {
     const baseUrl = normalizeBaseUrl(process.env.OPENAI_BASE_URL);
     const apiKey = process.env.OPENAI_API_KEY;
-    const defaultModel = process.env.OPENAI_MODEL;
+    const defaultModel = normalizeModel(
+        options.defaultModel ?? process.env.OPENAI_MODEL,
+    );
     const timeoutMs = parseTimeoutMs(process.env.OPENAI_TIMEOUT_MS, 30000);
     const streamTimeoutMs = parseTimeoutMs(
         process.env.OPENAI_STREAM_TIMEOUT_MS,
@@ -208,7 +210,7 @@ function createOpenAiCompatibleClient() {
         const resolvedModel = model || defaultModel;
 
         if (!resolvedModel) {
-            throw configurationError("OPENAI_MODEL is required");
+            throw configurationError("An AI model is required");
         }
 
         return resolvedModel;
@@ -225,6 +227,10 @@ function normalizeBaseUrl(value) {
         .trim()
         .replace(/\/+$/, "");
     return normalized || "";
+}
+
+function normalizeModel(value) {
+    return String(value || "").trim();
 }
 
 function resolveChatCompletionsUrl(baseUrl) {

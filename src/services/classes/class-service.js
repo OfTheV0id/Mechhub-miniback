@@ -271,7 +271,20 @@ function createClassService(db) {
         return getClassById(classId);
     }
 
+    async function deleteClass(classId) {
+        const classRecord = await getClassById(classId);
+        const avatarFileId = classRecord?.avatar_file_id;
 
+        await db.run(
+            `DELETE FROM classes
+             WHERE id = ?`,
+            classId,
+        );
+
+        if (avatarFileId) {
+            await db.run(`DELETE FROM uploaded_files WHERE id = ?`, avatarFileId);
+        }
+    }
 
     async function removeMember({ classId, memberId }) {
         return db.run(
@@ -335,6 +348,7 @@ function createClassService(db) {
         listClassesForUser,
         listMemberUserIds,
         listMembers,
+        deleteClass,
         removeMember,
         updateClass,
         updateMemberRole,

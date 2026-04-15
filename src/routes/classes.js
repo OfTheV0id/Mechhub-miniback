@@ -49,6 +49,9 @@ function conflict(message) {
     return error;
 }
 
+const DEFAULT_CLASS_DESCRIPTION =
+    "\u8fd9\u4e2a\u73ed\u7ea7\u5f88\u795e\u79d8 \u4ec0\u4e48\u4e5f\u6ca1\u7559\u4e0b";
+
 function requireUserId(req) {
     if (!req.session.userId) {
         throw unauthorized("Not authenticated");
@@ -103,6 +106,12 @@ function parseClassDescription(value) {
     }
 
     return description;
+}
+
+function parseCreateClassDescription(value) {
+    const description = parseClassDescription(value);
+
+    return description || DEFAULT_CLASS_DESCRIPTION;
 }
 
 function parseOptionalClassName(value) {
@@ -307,23 +316,15 @@ function createClassesRouter(db, { classEventsHub }) {
             const classRecord = await classService.createClass({
                 ownerUserId: userId,
                 name: parseClassName(req.body?.name),
-                description: parseClassDescription(req.body?.description),
+                description: parseCreateClassDescription(req.body?.description),
                 role: USER_ROLES.TEACHER,
                 inviteCode: createInviteCode(),
-            });
-
-            await emitClassInvalidation({
-                classId: classRecord.id,
-                targets: ["classes", "classDetail", "members"],
-                reason: "class_created",
-                extraUserIds: [userId],
-                excludeUserIds: [userId],
             });
 
             return res
                 .status(201)
                 .json(
-                    sanitizeClassDetailRecord(
+                    sanitizeClassListRecord(
                         attachCurrentUserId(classRecord, userId),
                     ),
                 );
@@ -479,6 +480,43 @@ function createClassesRouter(db, { classEventsHub }) {
             return res.json(
                 sanitizeClassDetailRecord(attachCurrentUserId(updatedClass, userId)),
             );
+        } catch (error) {
+            return next(error);
+        }
+    });
+
+    router.delete("/:classId", async (req, res, next) => {
+        try {
+            const userId = requireUserId(req);
+            const classId = parseClassId(req.params.classId);
+            const classRecord = await classService.getClassForUser({
+                classId,
+                userId,
+            });
+
+            if (!classRecord) {
+                throw notFound("Class not found");
+            }
+
+            if (classRecord.owner_user_id !== userId) {
+                throw forbidden("Only the class owner can delete the class");
+            }
+
+            const memberUserIds = await classService.listMemberUserIds(classId);
+
+            await classService.deleteClass(classId);
+
+            classEventsHub.emitToUsers(
+                memberUserIds.filter((memberUserId) => memberUserId !== userId),
+                {
+                    type: "class.invalidate",
+                    classId: String(classId),
+                    targets: ["classes", "classDetail", "members"],
+                    reason: "class_deleted",
+                },
+            );
+
+            return res.status(204).end();
         } catch (error) {
             return next(error);
         }
@@ -705,8 +743,13 @@ function createClassesRouter(db, { classEventsHub }) {
                 classId,
                 targets: ["members"],
                 reason: "member_role_updated",
-                extraUserIds: [member.user_id],
-                excludeUserIds: [userId],
+                excludeUserIds: [member.user_id],
+            });
+            classEventsHub.emitToUsers([member.user_id], {
+                type: "class.invalidate",
+                classId: String(classId),
+                targets: ["classes", "classDetail", "members"],
+                reason: "member_role_updated",
             });
 
             return res.json(

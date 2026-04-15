@@ -4,6 +4,13 @@ const {
 } = require("./math-normalizer");
 
 const TITLE_MAX_LENGTH = 60;
+
+function createChatTitleClient() {
+    return createOpenAiCompatibleClient({
+        defaultModel:
+            process.env.OPENAI_CHAT_MODEL || process.env.OPENAI_MODEL,
+    });
+}
 const SOLOCHAT_SYSTEM_PROMPT = `
 Your name is MechHub SoloChat.
 When you write mathematical expressions, use KaTeX/LaTeX-compatible syntax.
@@ -43,7 +50,7 @@ const GENERIC_TITLES = new Set([
 ]);
 
 function createSoloChatAiService(options = {}) {
-    const client = options.client || createOpenAiCompatibleClient();
+    const client = options.client || createChatTitleClient();
     const attachmentService = options.attachmentService || null;
 
     async function streamAssistantTurn({
@@ -106,7 +113,7 @@ async function generateConversationTitle({
     conversation,
     messages,
     attachmentService,
-    client = createOpenAiCompatibleClient(),
+    client = createChatTitleClient(),
     signal,
 }) {
     if (signal?.aborted || conversation?.title !== "New Chat") {
@@ -137,7 +144,7 @@ async function generateGradingTitle({
     promptText = "",
     annotations = [],
     attachmentFileName = "",
-    client = createOpenAiCompatibleClient(),
+    client = createChatTitleClient(),
     signal,
 }) {
     try {
