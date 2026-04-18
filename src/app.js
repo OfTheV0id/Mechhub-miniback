@@ -17,6 +17,7 @@ const { errorHandler } = require("./middleware/error-handler");
 
 function createApp(db) {
     const app = express();
+    app.set("trust proxy", 1);
     const classEventsHub = createClassEventsHub();
     const assignmentEventsHub = createAssignmentEventsHub();
     const solochatGradingEventsHub = createSoloChatGradingEventsHub();
