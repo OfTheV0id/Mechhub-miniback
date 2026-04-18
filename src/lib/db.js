@@ -538,7 +538,7 @@ async function ensureAssignmentTables(db) {
             creator_user_id INTEGER NOT NULL,
             title TEXT NOT NULL,
             description TEXT NOT NULL DEFAULT '',
-            status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'closed')),
+            status TEXT NOT NULL DEFAULT 'published' CHECK (status IN ('published', 'closed')),
             due_at TEXT DEFAULT NULL,
             created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
             updated_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
@@ -580,7 +580,6 @@ async function ensureAssignmentTables(db) {
             reviewed_at TEXT DEFAULT NULL,
             created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
             updated_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
-            UNIQUE (assignment_id, user_id),
             FOREIGN KEY (assignment_id) REFERENCES assignments(id) ON DELETE CASCADE,
             FOREIGN KEY (user_id) REFERENCES users(id),
             FOREIGN KEY (source_conversation_id) REFERENCES solochat_conversations(id) ON DELETE SET NULL,
@@ -628,6 +627,19 @@ async function ensureAssignmentTables(db) {
         ON assignment_submission_files(submission_id, file_id)
     `);
 
+    await db.run(
+        `UPDATE assignments
+         SET due_at = (${SQLITE_NOW_ISO_EXPRESSION})
+         WHERE status = 'closed'
+           AND (due_at IS NULL OR due_at > (${SQLITE_NOW_ISO_EXPRESSION}))`,
+    );
+
+    await db.run(
+        `UPDATE assignments
+         SET status = 'published'
+         WHERE status IN ('draft', 'closed')`,
+    );
+
     const submissionColumns = await db.all(
         `PRAGMA table_info(assignment_submissions)`,
     );
@@ -649,6 +661,10 @@ async function ensureAssignmentTables(db) {
            AND ai_score IS NOT NULL
            AND reviewed_at IS NULL`,
     );
+
+    if (await assignmentSubmissionsNeedHistoryRebuild(db)) {
+        await rebuildAssignmentSubmissionTablesForHistory(db);
+    }
 
     await db.exec(`
         CREATE TRIGGER IF NOT EXISTS trg_assignment_files_delete_uploaded_file
@@ -672,6 +688,173 @@ async function ensureAssignmentTables(db) {
              evaluation_error_message = COALESCE(evaluation_error_message, 'Evaluation interrupted by server restart')
          WHERE evaluation_status = 'evaluating'`,
     );
+}
+
+async function assignmentSubmissionsNeedHistoryRebuild(db) {
+    if (!(await tableExists(db, "assignment_submissions"))) {
+        return false;
+    }
+
+    const tableDefinition = await db.get(
+        `SELECT sql
+         FROM sqlite_master
+         WHERE type = 'table' AND name = 'assignment_submissions'`,
+    );
+    const normalizedSql = String(tableDefinition?.sql || "").replace(/\s+/g, " ");
+
+    return normalizedSql.includes("UNIQUE (assignment_id, user_id)");
+}
+
+async function rebuildAssignmentSubmissionTablesForHistory(db) {
+    const submissionColumns = await getTableColumns(db, "assignment_submissions");
+    const submissionColumnNames = new Set(
+        submissionColumns.map((column) => column.name),
+    );
+    const submissions = await db.all(
+        `SELECT
+             id,
+             assignment_id,
+             user_id,
+             answer_text,
+             source_conversation_id,
+             solochat_snapshot_json,
+             submission_version,
+             submitted_at,
+             evaluation_status,
+             evaluation_error_message,
+             ai_score,
+             ai_feedback_markdown,
+             ai_feedback_json,
+             ${
+                 submissionColumnNames.has("ai_reviewed_at")
+                     ? "ai_reviewed_at"
+                     : "NULL AS ai_reviewed_at"
+             },
+             final_score,
+             final_feedback_markdown,
+             is_teacher_overridden,
+             reviewer_user_id,
+             reviewed_at,
+             created_at,
+             updated_at
+         FROM assignment_submissions
+         ORDER BY id ASC`,
+    );
+    const submissionFileBindings = await db.all(
+        `SELECT submission_id, file_id
+         FROM assignment_submission_files
+         ORDER BY submission_id ASC, file_id ASC`,
+    );
+
+    await db.exec("PRAGMA foreign_keys = OFF");
+
+    try {
+        await dropTables(db, [
+            "assignment_submission_files",
+            "assignment_submissions",
+        ]);
+
+        await db.exec(`
+            CREATE TABLE assignment_submissions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                assignment_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                answer_text TEXT NOT NULL DEFAULT '',
+                source_conversation_id INTEGER DEFAULT NULL,
+                solochat_snapshot_json TEXT NOT NULL DEFAULT '',
+                submission_version INTEGER NOT NULL DEFAULT 1,
+                submitted_at TEXT DEFAULT NULL,
+                evaluation_status TEXT NOT NULL DEFAULT 'idle' CHECK (evaluation_status IN ('idle', 'evaluating', 'completed', 'failed')),
+                evaluation_error_message TEXT DEFAULT NULL,
+                ai_score INTEGER DEFAULT NULL,
+                ai_feedback_markdown TEXT NOT NULL DEFAULT '',
+                ai_feedback_json TEXT DEFAULT NULL,
+                ai_reviewed_at TEXT DEFAULT NULL,
+                final_score INTEGER DEFAULT NULL,
+                final_feedback_markdown TEXT NOT NULL DEFAULT '',
+                is_teacher_overridden INTEGER NOT NULL DEFAULT 0 CHECK (is_teacher_overridden IN (0, 1)),
+                reviewer_user_id INTEGER DEFAULT NULL,
+                reviewed_at TEXT DEFAULT NULL,
+                created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
+                updated_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
+                FOREIGN KEY (assignment_id) REFERENCES assignments(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                FOREIGN KEY (source_conversation_id) REFERENCES solochat_conversations(id) ON DELETE SET NULL,
+                FOREIGN KEY (reviewer_user_id) REFERENCES users(id)
+            );
+        `);
+
+        await db.exec(`
+            CREATE TABLE assignment_submission_files (
+                submission_id INTEGER NOT NULL,
+                file_id INTEGER NOT NULL UNIQUE,
+                PRIMARY KEY (submission_id, file_id),
+                FOREIGN KEY (submission_id) REFERENCES assignment_submissions(id) ON DELETE CASCADE,
+                FOREIGN KEY (file_id) REFERENCES uploaded_files(id) ON DELETE CASCADE
+            );
+        `);
+
+        for (const submission of submissions) {
+            await db.run(
+                `INSERT INTO assignment_submissions (
+                     id,
+                     assignment_id,
+                     user_id,
+                     answer_text,
+                     source_conversation_id,
+                     solochat_snapshot_json,
+                     submission_version,
+                     submitted_at,
+                     evaluation_status,
+                     evaluation_error_message,
+                     ai_score,
+                     ai_feedback_markdown,
+                     ai_feedback_json,
+                     ai_reviewed_at,
+                     final_score,
+                     final_feedback_markdown,
+                     is_teacher_overridden,
+                     reviewer_user_id,
+                     reviewed_at,
+                     created_at,
+                     updated_at
+                 )
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                submission.id,
+                submission.assignment_id,
+                submission.user_id,
+                submission.answer_text,
+                submission.source_conversation_id,
+                submission.solochat_snapshot_json,
+                submission.submission_version,
+                submission.submitted_at,
+                submission.evaluation_status,
+                submission.evaluation_error_message,
+                submission.ai_score,
+                submission.ai_feedback_markdown,
+                submission.ai_feedback_json,
+                submission.ai_reviewed_at,
+                submission.final_score,
+                submission.final_feedback_markdown,
+                submission.is_teacher_overridden,
+                submission.reviewer_user_id,
+                submission.reviewed_at,
+                submission.created_at,
+                submission.updated_at,
+            );
+        }
+
+        for (const binding of submissionFileBindings) {
+            await db.run(
+                `INSERT INTO assignment_submission_files (submission_id, file_id)
+                 VALUES (?, ?)`,
+                binding.submission_id,
+                binding.file_id,
+            );
+        }
+    } finally {
+        await db.exec("PRAGMA foreign_keys = ON");
+    }
 }
 
 async function createUploadedFilesTable(db) {

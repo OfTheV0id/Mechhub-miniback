@@ -22,9 +22,11 @@ const {
     normalizeRenderableMessageContent,
 } = require("../services/solochat/math-normalizer");
 
-const MAX_ASSIGNMENT_REFERENCE_ATTACHMENTS = 5;
-const MAX_ASSIGNMENT_SUBMISSION_ATTACHMENTS = 4;
+const MAX_ASSIGNMENT_REFERENCE_ATTACHMENTS = 10;
+const MAX_ASSIGNMENT_SUBMISSION_ATTACHMENTS = 10;
+const MAX_ASSIGNMENT_TOTAL_BYTES = 20 * 1024 * 1024;
 const MAX_SOLOCHAT_ATTACHMENT_PREVIEW_CHARS = 2_000;
+const ASSIGNMENT_DUE_SOON_WINDOW_MS = 24 * 60 * 60 * 1000;
 const assignmentReferenceUpload = multer({
     defParamCharset: "utf8",
     storage: multer.memoryStorage(),
@@ -147,22 +149,6 @@ function parseOptionalAssignmentDescription(value) {
     return parseAssignmentDescription(value);
 }
 
-function parseAssignmentStatus(value) {
-    if (!["draft", "published", "closed"].includes(value)) {
-        throw badRequest("status must be draft, published, or closed");
-    }
-
-    return value;
-}
-
-function parseOptionalAssignmentStatus(value) {
-    if (value === undefined) {
-        return undefined;
-    }
-
-    return parseAssignmentStatus(value);
-}
-
 function parseDueAt(value) {
     if (value === undefined) {
         return undefined;
@@ -253,7 +239,7 @@ function normalizeMulterError(error, maxFiles) {
     }
 
     if (error.code === "LIMIT_FILE_SIZE") {
-        return badRequest("Each attachment must be 20MB or smaller");
+        return badRequest("Each attachment must be 20MB or smaller (total attachments must be 20MB or smaller)");
     }
 
     if (error.code === "LIMIT_FILE_COUNT") {
@@ -362,6 +348,16 @@ function normalizeMultipartFiles(files, maxFiles) {
     return uploadedFiles;
 }
 
+function validateTotalAttachmentSize(uploadedFiles) {
+    const totalBytes = uploadedFiles.reduce(
+        (sum, file) => sum + (file.size || 0),
+        0,
+    );
+    if (totalBytes > MAX_ASSIGNMENT_TOTAL_BYTES) {
+        throw badRequest("Total attachment size must be 20MB or smaller");
+    }
+}
+
 function serializeId(value) {
     if (value === undefined || value === null) {
         return null;
@@ -417,6 +413,8 @@ function sanitizeTextPreviewResponse(file, preview) {
 }
 
 function sanitizeAssignmentBase(assignment) {
+    const dueAt = assignment.due_at ? toIsoTimestamp(assignment.due_at) : null;
+
     return {
         id: serializeId(assignment.id),
         classId: serializeId(assignment.class_id),
@@ -431,23 +429,54 @@ function sanitizeAssignmentBase(assignment) {
         }),
         title: assignment.title,
         description: assignment.description,
-        status: assignment.status,
-        dueAt: assignment.due_at ? toIsoTimestamp(assignment.due_at) : null,
+        status: computeAssignmentStatus(assignment.due_at),
+        dueAt,
         createdAt: toIsoTimestamp(assignment.created_at),
         updatedAt: toIsoTimestamp(assignment.updated_at),
     };
+}
+
+function computeAssignmentStatus(dueAt) {
+    if (!dueAt) {
+        return "published";
+    }
+
+    const parsed = new Date(dueAt);
+
+    if (Number.isNaN(parsed.getTime())) {
+        return "published";
+    }
+
+    const diffMs = parsed.getTime() - Date.now();
+
+    if (diffMs <= 0) {
+        return "overdue";
+    }
+
+    if (diffMs <= ASSIGNMENT_DUE_SOON_WINDOW_MS) {
+        return "due_soon";
+    }
+
+    return "published";
 }
 
 function sanitizeAssignmentListBase(assignment) {
     return {
         id: serializeId(assignment.id),
         title: assignment.title,
-        status: assignment.status,
+        status: computeAssignmentStatus(assignment.due_at),
+        dueAt: assignment.due_at ? toIsoTimestamp(assignment.due_at) : null,
+        createdAt: toIsoTimestamp(assignment.created_at),
+        updatedAt: toIsoTimestamp(assignment.updated_at),
     };
 }
 
 function sanitizeTeacherAssignmentListItem(assignment) {
-    return sanitizeAssignmentListBase(assignment);
+    return {
+        ...sanitizeAssignmentListBase(assignment),
+        submissionCount: Number(assignment.submission_count || 0),
+        totalStudentCount: Number(assignment.total_student_count || 0),
+    };
 }
 
 function sanitizeTeacherAssignmentStats(assignment) {
@@ -560,10 +589,10 @@ function sanitizeTeacherSubmissionFinalResult(submission) {
 function sanitizeStudentSubmissionSummary(submission) {
     const hasExplicitSummaryId = Object.prototype.hasOwnProperty.call(
         submission || {},
-        "my_submission_id",
+        "latest_submission_id",
     );
     const submissionId = hasExplicitSummaryId
-        ? submission?.my_submission_id
+        ? submission?.latest_submission_id
         : submission?.id;
 
     if (!submissionId) {
@@ -574,56 +603,59 @@ function sanitizeStudentSubmissionSummary(submission) {
         ai_score:
             submission.ai_score !== undefined
                 ? submission.ai_score
-                : submission.my_ai_score,
+                : submission.latest_ai_score,
         ai_feedback_markdown:
             submission.ai_feedback_markdown !== undefined
                 ? submission.ai_feedback_markdown
-                : submission.my_ai_feedback_markdown,
+                : submission.latest_ai_feedback_markdown,
         final_score:
             submission.final_score !== undefined
                 ? submission.final_score
-                : submission.my_final_score,
+                : submission.latest_final_score,
         final_feedback_markdown:
             submission.final_feedback_markdown !== undefined
                 ? submission.final_feedback_markdown
-                : submission.my_final_feedback_markdown,
+                : submission.latest_final_feedback_markdown,
         is_teacher_overridden:
             submission.is_teacher_overridden !== undefined
                 ? submission.is_teacher_overridden
-                : submission.my_is_teacher_overridden,
+                : submission.latest_is_teacher_overridden,
         reviewed_at:
             submission.reviewed_at !== undefined
                 ? submission.reviewed_at
-                : submission.my_reviewed_at,
+                : submission.latest_reviewed_at,
     });
 
     return {
         id: serializeId(submissionId),
         submissionVersion: Number(
             hasExplicitSummaryId
-                ? submission.my_submission_version || 0
+                ? submission.latest_submission_version || 0
                 : submission.submission_version || 0,
         ),
         submittedAt: hasExplicitSummaryId
-            ? submission.my_submitted_at
-                ? toIsoTimestamp(submission.my_submitted_at)
+            ? submission.latest_submitted_at
+                ? toIsoTimestamp(submission.latest_submitted_at)
                 : null
             : submission.submitted_at
               ? toIsoTimestamp(submission.submitted_at)
             : null,
         evaluationStatus: hasExplicitSummaryId
-            ? submission.my_evaluation_status
+            ? submission.latest_evaluation_status
             : submission.evaluation_status,
         evaluationErrorMessage:
             (hasExplicitSummaryId
-                ? submission.my_evaluation_error_message
+                ? submission.latest_evaluation_error_message
                 : submission.evaluation_error_message) || null,
         ...publicResult,
     };
 }
 
 function sanitizeStudentAssignmentListItem(assignment) {
-    return sanitizeAssignmentListBase(assignment);
+    return {
+        ...sanitizeAssignmentListBase(assignment),
+        latestSubmissionStatus: assignment.latest_evaluation_status ?? null,
+    };
 }
 
 function sanitizeTeacherAssignmentDetail(assignment, files = []) {
@@ -638,7 +670,7 @@ function sanitizeStudentAssignmentDetail(assignment, files = []) {
     return {
         ...sanitizeAssignmentBase(assignment),
         attachments: files.map(sanitizeAttachment),
-        mySubmission: sanitizeStudentSubmissionSummary(assignment),
+        latestSubmission: sanitizeStudentSubmissionSummary(assignment),
     };
 }
 
@@ -890,6 +922,10 @@ async function streamSubmissionEvaluation({
             submission: sanitizeStreamSubmission(submission),
         });
         writeStreamEvent(res, {
+            type: "sidebar_update",
+            historyItem: sanitizeStreamSubmission(submission),
+        });
+        writeStreamEvent(res, {
             type: "evaluation_started",
             submissionId: serializeId(submission.id),
         });
@@ -986,6 +1022,7 @@ function createAssignmentsRouter(db, { assignmentEventsHub }) {
     async function emitAssignmentInvalidation({
         classId,
         assignmentId,
+        submissionId = null,
         targets,
         reason,
         excludeUserIds = [],
@@ -1000,6 +1037,7 @@ function createAssignmentsRouter(db, { assignmentEventsHub }) {
             type: "assignment.invalidate",
             classId: String(classId),
             assignmentId: assignmentId ? String(assignmentId) : null,
+            submissionId: submissionId ? String(submissionId) : null,
             targets,
             reason,
         });
@@ -1101,6 +1139,7 @@ function createAssignmentsRouter(db, { assignmentEventsHub }) {
                 req.files,
                 MAX_ASSIGNMENT_REFERENCE_ATTACHMENTS,
             );
+            validateTotalAttachmentSize(uploadedFiles);
 
             const assignment = await withImmediateTransaction(async (txDb) => {
                 const txAssignmentService = createAssignmentService(txDb);
@@ -1116,9 +1155,10 @@ function createAssignmentsRouter(db, { assignmentEventsHub }) {
                 createdFiles = [];
                 for (const uploadedFile of uploadedFiles) {
                     createdFiles.push(
-                        await txFileService.processUpload({
+                        await txFileService.processAssignmentFileUpload({
                             userId,
                             file: uploadedFile,
+                            subDir: "assignment-references",
                         }),
                     );
                 }
@@ -1151,7 +1191,7 @@ function createAssignmentsRouter(db, { assignmentEventsHub }) {
 
             return res
                 .status(201)
-                .json(sanitizeTeacherAssignmentDetail(summary, files));
+                .json(sanitizeTeacherAssignmentListItem(summary));
         } catch (error) {
             if (createdFiles.length) {
                 await deleteStoredAttachments(createdFiles);
@@ -1177,10 +1217,6 @@ function createAssignmentsRouter(db, { assignmentEventsHub }) {
                 classId: assignment.class_id,
                 userId,
             });
-
-            if (!isTeacherInClass(classRecord) && assignment.status === "draft") {
-                throw notFound("Assignment not found");
-            }
 
             const files = await assignmentService.listAssignmentFiles(assignmentId);
 
@@ -1218,23 +1254,22 @@ function createAssignmentsRouter(db, { assignmentEventsHub }) {
             const description = parseOptionalAssignmentDescription(
                 req.body?.description,
             );
-            const status = parseOptionalAssignmentStatus(req.body?.status);
             const dueAt = parseDueAt(req.body?.dueAt);
 
             if (
                 title === undefined &&
                 description === undefined &&
-                status === undefined &&
                 dueAt === undefined
             ) {
-                throw badRequest("At least one assignment field is required");
+                throw badRequest(
+                    "At least one editable assignment field is required",
+                );
             }
 
             await assignmentService.updateAssignment({
                 assignmentId,
                 title,
                 description,
-                status,
                 dueAt,
             });
 
@@ -1282,9 +1317,10 @@ function createAssignmentsRouter(db, { assignmentEventsHub }) {
                 throw badRequest('file must be uploaded under the "file" field');
             }
 
-            createdFile = await fileService.processUpload({
+            createdFile = await fileService.processAssignmentFileUpload({
                 userId,
                 file: req.file,
+                subDir: "assignment-references",
             });
 
             const attachedFile = await assignmentService.attachFileToAssignment({
@@ -1425,38 +1461,6 @@ function createAssignmentsRouter(db, { assignmentEventsHub }) {
         }
     });
 
-    router.get(
-        "/assignments/:assignmentId/submissions/:submissionId",
-        async (req, res, next) => {
-            try {
-                const userId = requireUserId(req);
-                const assignmentId = parseAssignmentId(req.params.assignmentId);
-                const submissionId = parseSubmissionId(req.params.submissionId);
-                await requireTeacherAssignmentContext({
-                    assignmentId,
-                    userId,
-                });
-
-                const submission =
-                    await assignmentService.getSubmissionDetailForTeacher({
-                        assignmentId,
-                        submissionId,
-                    });
-
-                if (!submission) {
-                    throw notFound("Submission not found");
-                }
-
-                const files = await assignmentService.listSubmissionFiles(
-                    submissionId,
-                );
-                return res.json(sanitizeTeacherSubmissionDetail(submission, files));
-            } catch (error) {
-                return next(error);
-            }
-        },
-    );
-
     router.patch(
         "/assignments/:assignmentId/submissions/:submissionId/final-review",
         async (req, res, next) => {
@@ -1525,7 +1529,15 @@ function createAssignmentsRouter(db, { assignmentEventsHub }) {
                 await emitAssignmentInvalidation({
                     classId: assignment.class_id,
                     assignmentId,
-                    targets: ["submissions", "submissionDetail", "mySubmission"],
+                    submissionId,
+                    targets: [
+                        "assignments",
+                        "assignmentDetail",
+                        "submissions",
+                        "submissionDetail",
+                        "latestSubmission",
+                        "submissionHistory",
+                    ],
                     reason: "final_review_saved",
                     excludeUserIds: [userId],
                 });
@@ -1539,8 +1551,8 @@ function createAssignmentsRouter(db, { assignmentEventsHub }) {
         },
     );
 
-    router.put(
-        "/assignments/:assignmentId/submission/my",
+    router.post(
+        "/assignments/:assignmentId/submissions",
         async (req, res, next) => {
             let createdFiles = [];
 
@@ -1564,11 +1576,7 @@ function createAssignmentsRouter(db, { assignmentEventsHub }) {
                     throw forbidden("Teachers cannot submit student assignments");
                 }
 
-                if (assignment.status === "draft") {
-                    throw notFound("Assignment not found");
-                }
-
-                if (assignment.status === "closed" || hasDueAtPassed(assignment.due_at)) {
+                if (hasDueAtPassed(assignment.due_at)) {
                     throw forbidden("Assignment submissions are closed");
                 }
 
@@ -1583,6 +1591,7 @@ function createAssignmentsRouter(db, { assignmentEventsHub }) {
                     req.files,
                     MAX_ASSIGNMENT_SUBMISSION_ATTACHMENTS,
                 );
+                validateTotalAttachmentSize(uploadedFiles);
                 const answerText = parseAnswerText(req.body?.answerText);
                 const solochatConversationId = parseOptionalConversationId(
                     req.body?.solochatConversationId,
@@ -1610,15 +1619,14 @@ function createAssignmentsRouter(db, { assignmentEventsHub }) {
                     createdFiles = [];
                     for (const uploadedFile of uploadedFiles) {
                         createdFiles.push(
-                            await txFileService.processImageUpload({
+                            await txFileService.processAssignmentSubmissionUpload({
                                 userId,
                                 file: uploadedFile,
-                                subDir: "assignment-submissions",
                             }),
                         );
                     }
 
-                    return txAssignmentService.upsertSubmission({
+                    return txAssignmentService.createSubmission({
                         assignmentId,
                         userId,
                         answerText,
@@ -1634,6 +1642,7 @@ function createAssignmentsRouter(db, { assignmentEventsHub }) {
                 await emitAssignmentInvalidation({
                     classId: assignment.class_id,
                     assignmentId,
+                    submissionId: submission.id,
                     targets: ["assignments", "assignmentDetail", "submissions"],
                     reason: "submission_created",
                     excludeUserIds: [userId],
@@ -1655,14 +1664,38 @@ function createAssignmentsRouter(db, { assignmentEventsHub }) {
                     assignmentService,
                     assignmentEvaluator,
                     referenceFiles,
-                    onEvaluationSettled: () =>
-                        emitAssignmentInvalidation({
+                    onEvaluationSettled: async () => {
+                        await emitAssignmentInvalidation({
                             classId: assignment.class_id,
                             assignmentId,
-                            targets: ["assignments", "assignmentDetail", "submissions", "mySubmission"],
+                            submissionId: submission.id,
+                            targets: [
+                                "assignments",
+                                "assignmentDetail",
+                                "submissions",
+                                "submissionDetail",
+                                "latestSubmission",
+                                "submissionHistory",
+                            ],
                             reason: "evaluation_settled",
                             excludeUserIds: [userId],
-                        }),
+                        });
+                        // 单独通知提交学生刷新自己的提交状态
+                        assignmentEventsHub.emitToUsers([userId], {
+                            type: "assignment.invalidate",
+                            classId: String(assignment.class_id),
+                            assignmentId: String(assignmentId),
+                            submissionId: String(submission.id),
+                            targets: [
+                                "assignments",
+                                "assignmentDetail",
+                                "submissionDetail",
+                                "latestSubmission",
+                                "submissionHistory",
+                            ],
+                            reason: "evaluation_settled",
+                        });
+                    },
                 });
             } catch (error) {
                 if (createdFiles.length) {
@@ -1675,7 +1708,7 @@ function createAssignmentsRouter(db, { assignmentEventsHub }) {
     );
 
     router.get(
-        "/assignments/:assignmentId/submission/my",
+        "/assignments/:assignmentId/submissions/latest",
         async (req, res, next) => {
             try {
                 const userId = requireUserId(req);
@@ -1694,15 +1727,11 @@ function createAssignmentsRouter(db, { assignmentEventsHub }) {
                 });
 
                 if (isTeacherInClass(classRecord)) {
-                    throw forbidden("Teachers do not have a student submission");
-                }
-
-                if (assignment.status === "draft") {
-                    throw notFound("Assignment not found");
+                    throw forbidden("Teachers do not have a latest student submission");
                 }
 
                 const submission =
-                    await assignmentService.getSubmissionForAssignmentAndUser({
+                    await assignmentService.getLatestSubmissionForAssignmentAndUser({
                         assignmentId,
                         userId,
                     });
@@ -1715,6 +1744,91 @@ function createAssignmentsRouter(db, { assignmentEventsHub }) {
                     submission.id,
                 );
                 return res.json(sanitizeStudentSubmissionDetail(submission, files));
+            } catch (error) {
+                return next(error);
+            }
+        },
+    );
+
+    router.get(
+        "/assignments/:assignmentId/submissions/history",
+        async (req, res, next) => {
+            try {
+                const userId = requireUserId(req);
+                const assignmentId = parseAssignmentId(req.params.assignmentId);
+                const assignment = await assignmentService.getAssignmentById(
+                    assignmentId,
+                );
+
+                if (!assignment) {
+                    throw notFound("Assignment not found");
+                }
+
+                const classRecord = await requireClassMembership({
+                    classId: assignment.class_id,
+                    userId,
+                });
+
+                if (isTeacherInClass(classRecord)) {
+                    throw forbidden("Teachers do not have student submissions");
+                }
+
+                const history =
+                    await assignmentService.listSubmissionHistoryForStudent({
+                        assignmentId,
+                        userId,
+                    });
+
+                return res.json(history.map(sanitizeStudentSubmissionSummary));
+            } catch (error) {
+                return next(error);
+            }
+        },
+    );
+
+    router.get(
+        "/assignments/:assignmentId/submissions/:submissionId",
+        async (req, res, next) => {
+            try {
+                const userId = requireUserId(req);
+                const assignmentId = parseAssignmentId(req.params.assignmentId);
+                const submissionId = parseSubmissionId(req.params.submissionId);
+                const assignment = await assignmentService.getAssignmentById(
+                    assignmentId,
+                );
+
+                if (!assignment) {
+                    throw notFound("Assignment not found");
+                }
+
+                const classRecord = await requireClassMembership({
+                    classId: assignment.class_id,
+                    userId,
+                });
+                const teacherView = isTeacherInClass(classRecord);
+                const submission = teacherView
+                    ? await assignmentService.getSubmissionDetailForTeacher({
+                          assignmentId,
+                          submissionId,
+                      })
+                    : await assignmentService.getSubmissionDetailForStudent({
+                          assignmentId,
+                          submissionId,
+                          userId,
+                      });
+
+                if (!submission) {
+                    throw notFound("Submission not found");
+                }
+
+                const files = await assignmentService.listSubmissionFiles(
+                    submissionId,
+                );
+                return res.json(
+                    teacherView
+                        ? sanitizeTeacherSubmissionDetail(submission, files)
+                        : sanitizeStudentSubmissionDetail(submission, files),
+                );
             } catch (error) {
                 return next(error);
             }
@@ -1767,7 +1881,15 @@ function createAssignmentsRouter(db, { assignmentEventsHub }) {
                         emitAssignmentInvalidation({
                             classId: assignment.class_id,
                             assignmentId,
-                            targets: ["submissions", "submissionDetail", "mySubmission"],
+                            submissionId,
+                            targets: [
+                                "assignments",
+                                "assignmentDetail",
+                                "submissions",
+                                "submissionDetail",
+                                "latestSubmission",
+                                "submissionHistory",
+                            ],
                             reason: "re_evaluation_settled",
                             excludeUserIds: [userId],
                         }),

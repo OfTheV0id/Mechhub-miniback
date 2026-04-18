@@ -112,6 +112,101 @@ function createFileService(db, options = {}) {
         }
     }
 
+    async function processAssignmentFileUpload({
+        userId,
+        file,
+        subDir = "assignment-files",
+    }) {
+        validateUploadedFile(file);
+
+        const mimeType = String(file.mimetype || "").trim().toLowerCase();
+        const isImage = mimeType.startsWith("image/");
+
+        let normalizedFile;
+        let storedFileName;
+        if (isImage) {
+            normalizedFile = await normalizeImageUpload(file);
+            storedFileName = replaceFileExtension(
+                sanitizeFileName(file.originalname || "image.bin"),
+                ".webp",
+            );
+        } else {
+            normalizedFile = { ...file, kind: FILE_KINDS.TEXT };
+            storedFileName = sanitizeFileName(
+                file.originalname || "upload.bin",
+            );
+        }
+
+        const relativePath = path.join(
+            subDir,
+            String(userId),
+            `${crypto.randomUUID()}-${storedFileName}`,
+        );
+        const absolutePath = path.join(uploadsRoot, relativePath);
+
+        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+        await fs.writeFile(absolutePath, normalizedFile.buffer);
+
+        try {
+            return await createFileRecord({
+                userId,
+                storagePath: absolutePath,
+                fileName: storedFileName,
+                mimeType: isImage
+                    ? "image/webp"
+                    : String(
+                          normalizedFile.mimetype || "application/octet-stream",
+                      ),
+                sizeBytes: normalizedFile.size,
+                width: normalizedFile.width ?? null,
+                height: normalizedFile.height ?? null,
+                kind: normalizedFile.kind,
+            });
+        } catch (error) {
+            await deleteStoredFilesBestEffort([{ storage_path: absolutePath }]);
+            throw error;
+        }
+    }
+
+    async function processAssignmentSubmissionUpload({ userId, file }) {
+        validateUploadedFile(file);
+
+        // Accepts images and approved text/code documents only (same as solochat)
+        const normalizedFile = await normalizeSoloChatUpload(file);
+        const safeFileName = sanitizeFileName(file.originalname || "upload.bin");
+        const storedFileName =
+            normalizedFile.kind === FILE_KINDS.IMAGE
+                ? replaceFileExtension(safeFileName, ".webp")
+                : safeFileName;
+        const relativePath = path.join(
+            "assignment-submissions",
+            String(userId),
+            `${crypto.randomUUID()}-${storedFileName}`,
+        );
+        const absolutePath = path.join(uploadsRoot, relativePath);
+
+        await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+        await fs.writeFile(absolutePath, normalizedFile.buffer);
+
+        try {
+            return await createFileRecord({
+                userId,
+                storagePath: absolutePath,
+                fileName: storedFileName,
+                mimeType: String(
+                    normalizedFile.mimetype || "application/octet-stream",
+                ),
+                sizeBytes: normalizedFile.size,
+                width: normalizedFile.width ?? null,
+                height: normalizedFile.height ?? null,
+                kind: normalizedFile.kind,
+            });
+        } catch (error) {
+            await deleteStoredFilesBestEffort([{ storage_path: absolutePath }]);
+            throw error;
+        }
+    }
+
     async function createFileRecord({
         userId,
         storagePath,
@@ -335,6 +430,8 @@ function createFileService(db, options = {}) {
         getSoloChatFileForUser,
         listFilesForConversation,
         listFilesForSoloChatMessage,
+        processAssignmentFileUpload,
+        processAssignmentSubmissionUpload,
         processImageUpload,
         processUpload,
         readTextContent,

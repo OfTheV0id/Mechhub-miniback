@@ -2,13 +2,48 @@ const { SQLITE_NOW_ISO_EXPRESSION } = require("../../lib/time");
 
 function createAssignmentService(db) {
     const nowExpression = SQLITE_NOW_ISO_EXPRESSION;
+    const latestSubmissionJoinForAssignments = `
+        LEFT JOIN assignment_submissions s
+            ON s.id = (
+                SELECT s2.id
+                FROM assignment_submissions s2
+                WHERE s2.assignment_id = a.id
+                  AND s2.user_id = ?
+                ORDER BY s2.submission_version DESC, s2.id DESC
+                LIMIT 1
+            )
+    `;
+    const latestSubmissionStatsJoin = `
+        LEFT JOIN (
+            SELECT
+                latest.assignment_id,
+                COUNT(*) AS submission_count,
+                COUNT(
+                    CASE WHEN latest.evaluation_status = 'completed' THEN 1 END
+                ) AS evaluated_count
+            FROM assignment_submissions latest
+            INNER JOIN (
+                SELECT
+                    assignment_id,
+                    user_id,
+                    MAX(submission_version) AS latest_submission_version
+                FROM assignment_submissions
+                GROUP BY assignment_id, user_id
+            ) latest_versions
+                ON latest_versions.assignment_id = latest.assignment_id
+               AND latest_versions.user_id = latest.user_id
+               AND latest_versions.latest_submission_version =
+                    latest.submission_version
+            GROUP BY latest.assignment_id
+        ) submission_counts
+            ON submission_counts.assignment_id = a.id
+    `;
 
     async function createAssignment({
         classId,
         creatorUserId,
         title,
         description,
-        status = "draft",
         dueAt = null,
     }) {
         const result = await db.run(
@@ -27,7 +62,7 @@ function createAssignmentService(db) {
             creatorUserId,
             title,
             description,
-            status,
+            "published",
             dueAt,
         );
 
@@ -38,7 +73,6 @@ function createAssignmentService(db) {
         assignmentId,
         title,
         description,
-        status,
         dueAt,
     }) {
         const updates = [];
@@ -52,11 +86,6 @@ function createAssignmentService(db) {
         if (description !== undefined) {
             updates.push("description = ?");
             values.push(description);
-        }
-
-        if (status !== undefined) {
-            updates.push("status = ?");
-            values.push(status);
         }
 
         if (dueAt !== undefined) {
@@ -122,15 +151,7 @@ function createAssignmentService(db) {
                  GROUP BY class_id
              ) student_counts
                  ON student_counts.class_id = a.class_id
-             LEFT JOIN (
-                 SELECT
-                     assignment_id,
-                     COUNT(*) AS submission_count,
-                     COUNT(CASE WHEN evaluation_status = 'completed' THEN 1 END) AS evaluated_count
-                 FROM assignment_submissions
-                 GROUP BY assignment_id
-             ) submission_counts
-                 ON submission_counts.assignment_id = a.id
+             ${latestSubmissionStatsJoin}
              WHERE a.class_id = ?
              ORDER BY a.created_at DESC, a.id DESC`,
             classId,
@@ -149,23 +170,20 @@ function createAssignmentService(db) {
                  a.due_at,
                  a.created_at,
                  a.updated_at,
-                 s.id AS my_submission_id,
-                 s.submission_version AS my_submission_version,
-                 s.submitted_at AS my_submitted_at,
-                 s.evaluation_status AS my_evaluation_status,
-                 s.evaluation_error_message AS my_evaluation_error_message,
-                 s.ai_score AS my_ai_score,
-                 s.ai_feedback_markdown AS my_ai_feedback_markdown,
-                 s.final_score AS my_final_score,
-                 s.final_feedback_markdown AS my_final_feedback_markdown,
-                 s.is_teacher_overridden AS my_is_teacher_overridden,
-                 s.reviewed_at AS my_reviewed_at
+                 s.id AS latest_submission_id,
+                 s.submission_version AS latest_submission_version,
+                 s.submitted_at AS latest_submitted_at,
+                 s.evaluation_status AS latest_evaluation_status,
+                 s.evaluation_error_message AS latest_evaluation_error_message,
+                 s.ai_score AS latest_ai_score,
+                 s.ai_feedback_markdown AS latest_ai_feedback_markdown,
+                 s.final_score AS latest_final_score,
+                 s.final_feedback_markdown AS latest_final_feedback_markdown,
+                 s.is_teacher_overridden AS latest_is_teacher_overridden,
+                 s.reviewed_at AS latest_reviewed_at
              FROM assignments a
-             LEFT JOIN assignment_submissions s
-                 ON s.assignment_id = a.id
-                AND s.user_id = ?
+             ${latestSubmissionJoinForAssignments}
              WHERE a.class_id = ?
-               AND a.status IN ('published', 'closed')
              ORDER BY a.created_at DESC, a.id DESC`,
             userId,
             classId,
@@ -203,15 +221,7 @@ function createAssignmentService(db) {
                  GROUP BY class_id
              ) student_counts
                  ON student_counts.class_id = a.class_id
-             LEFT JOIN (
-                 SELECT
-                     assignment_id,
-                     COUNT(*) AS submission_count,
-                     COUNT(CASE WHEN evaluation_status = 'completed' THEN 1 END) AS evaluated_count
-                 FROM assignment_submissions
-                 GROUP BY assignment_id
-             ) submission_counts
-                 ON submission_counts.assignment_id = a.id
+             ${latestSubmissionStatsJoin}
              WHERE a.id = ?`,
             assignmentId,
         );
@@ -229,17 +239,17 @@ function createAssignmentService(db) {
                  a.due_at,
                  a.created_at,
                  a.updated_at,
-                 s.id AS my_submission_id,
-                 s.submission_version AS my_submission_version,
-                 s.submitted_at AS my_submitted_at,
-                 s.evaluation_status AS my_evaluation_status,
-                 s.evaluation_error_message AS my_evaluation_error_message,
-                 s.ai_score AS my_ai_score,
-                 s.ai_feedback_markdown AS my_ai_feedback_markdown,
-                 s.final_score AS my_final_score,
-                 s.final_feedback_markdown AS my_final_feedback_markdown,
-                 s.is_teacher_overridden AS my_is_teacher_overridden,
-                 s.reviewed_at AS my_reviewed_at,
+                 s.id AS latest_submission_id,
+                 s.submission_version AS latest_submission_version,
+                 s.submitted_at AS latest_submitted_at,
+                 s.evaluation_status AS latest_evaluation_status,
+                 s.evaluation_error_message AS latest_evaluation_error_message,
+                 s.ai_score AS latest_ai_score,
+                 s.ai_feedback_markdown AS latest_ai_feedback_markdown,
+                 s.final_score AS latest_final_score,
+                 s.final_feedback_markdown AS latest_final_feedback_markdown,
+                 s.is_teacher_overridden AS latest_is_teacher_overridden,
+                 s.reviewed_at AS latest_reviewed_at,
                  creator.email AS creator_email,
                  creator.display_name AS creator_display_name,
                  creator.avatar_url AS creator_avatar_url,
@@ -249,9 +259,7 @@ function createAssignmentService(db) {
              FROM assignments a
              INNER JOIN users creator
                  ON creator.id = a.creator_user_id
-             LEFT JOIN assignment_submissions s
-                 ON s.assignment_id = a.id
-                AND s.user_id = ?
+             ${latestSubmissionJoinForAssignments}
              WHERE a.id = ?`,
             userId,
             assignmentId,
@@ -314,11 +322,16 @@ function createAssignmentService(db) {
         return file;
     }
 
-    async function getSubmissionForAssignmentAndUser({ assignmentId, userId }) {
+    async function getLatestSubmissionForAssignmentAndUser({
+        assignmentId,
+        userId,
+    }) {
         return db.get(
             `SELECT id, assignment_id, user_id, answer_text, source_conversation_id, solochat_snapshot_json, submission_version, submitted_at, evaluation_status, evaluation_error_message, ai_score, ai_feedback_markdown, ai_feedback_json, ai_reviewed_at, final_score, final_feedback_markdown, is_teacher_overridden, reviewer_user_id, reviewed_at, created_at, updated_at
              FROM assignment_submissions
-             WHERE assignment_id = ? AND user_id = ?`,
+             WHERE assignment_id = ? AND user_id = ?
+             ORDER BY submission_version DESC, id DESC
+             LIMIT 1`,
             assignmentId,
             userId,
         );
@@ -345,7 +358,7 @@ function createAssignmentService(db) {
         );
     }
 
-    async function upsertSubmission({
+    async function createSubmission({
         assignmentId,
         userId,
         answerText,
@@ -353,78 +366,45 @@ function createAssignmentService(db) {
         solochatSnapshotJson,
         attachmentFileIds = [],
     }) {
-        const existingSubmission = await getSubmissionForAssignmentAndUser({
+        const latestSubmission = await getLatestSubmissionForAssignmentAndUser({
             assignmentId,
             userId,
         });
-        let submissionId = existingSubmission?.id || null;
+        const nextSubmissionVersion =
+            Number(latestSubmission?.submission_version || 0) + 1;
 
-        if (!existingSubmission) {
-            const result = await db.run(
-                `INSERT INTO assignment_submissions (
-                     assignment_id,
-                     user_id,
-                     answer_text,
-                     source_conversation_id,
-                     solochat_snapshot_json,
-                     submission_version,
-                     submitted_at,
-                     evaluation_status,
-                     evaluation_error_message,
-                     ai_score,
-                     ai_feedback_markdown,
-                     ai_feedback_json,
-                     ai_reviewed_at,
-                     final_score,
-                     final_feedback_markdown,
-                     is_teacher_overridden,
-                     reviewer_user_id,
-                     reviewed_at,
-                     created_at,
-                     updated_at
-                 )
-                VALUES (?, ?, ?, ?, ?, 1, ${nowExpression}, 'evaluating', NULL, NULL, '', NULL, NULL, NULL, '', 0, NULL, NULL, ${nowExpression}, ${nowExpression})`,
-                assignmentId,
-                userId,
-                answerText,
-                sourceConversationId,
-                solochatSnapshotJson,
-            );
-            submissionId = result.lastID;
-        } else {
-            await db.run(
-                `UPDATE assignment_submissions
-                 SET answer_text = ?,
-                     source_conversation_id = ?,
-                     solochat_snapshot_json = ?,
-                     submission_version = submission_version + 1,
-                     submitted_at = ${nowExpression},
-                     evaluation_status = 'evaluating',
-                     evaluation_error_message = NULL,
-                     ai_score = NULL,
-                     ai_feedback_markdown = '',
-                     ai_feedback_json = NULL,
-                     ai_reviewed_at = NULL,
-                     final_score = NULL,
-                     final_feedback_markdown = '',
-                     is_teacher_overridden = 0,
-                     reviewer_user_id = NULL,
-                     reviewed_at = NULL,
-                     updated_at = ${nowExpression}
-                 WHERE id = ?`,
-                answerText,
-                sourceConversationId,
-                solochatSnapshotJson,
-                existingSubmission.id,
-            );
-            submissionId = existingSubmission.id;
-
-            await db.run(
-                `DELETE FROM assignment_submission_files
-                 WHERE submission_id = ?`,
-                submissionId,
-            );
-        }
+        const result = await db.run(
+            `INSERT INTO assignment_submissions (
+                 assignment_id,
+                 user_id,
+                 answer_text,
+                 source_conversation_id,
+                 solochat_snapshot_json,
+                 submission_version,
+                 submitted_at,
+                 evaluation_status,
+                 evaluation_error_message,
+                 ai_score,
+                 ai_feedback_markdown,
+                 ai_feedback_json,
+                 ai_reviewed_at,
+                 final_score,
+                 final_feedback_markdown,
+                 is_teacher_overridden,
+                 reviewer_user_id,
+                 reviewed_at,
+                 created_at,
+                 updated_at
+             )
+             VALUES (?, ?, ?, ?, ?, ?, ${nowExpression}, 'evaluating', NULL, NULL, '', NULL, NULL, NULL, '', 0, NULL, NULL, ${nowExpression}, ${nowExpression})`,
+            assignmentId,
+            userId,
+            answerText,
+            sourceConversationId,
+            solochatSnapshotJson,
+            nextSubmissionVersion,
+        );
+        const submissionId = result.lastID;
 
         for (const fileId of attachmentFileIds) {
             await db.run(
@@ -582,6 +562,44 @@ function createAssignmentService(db) {
         );
     }
 
+    async function getSubmissionDetailForStudent({
+        assignmentId,
+        submissionId,
+        userId,
+    }) {
+        return db.get(
+            `SELECT
+                 id,
+                 assignment_id,
+                 user_id,
+                 answer_text,
+                 source_conversation_id,
+                 solochat_snapshot_json,
+                 submission_version,
+                 submitted_at,
+                 evaluation_status,
+                 evaluation_error_message,
+                 ai_score,
+                 ai_feedback_markdown,
+                 ai_feedback_json,
+                 ai_reviewed_at,
+                 final_score,
+                 final_feedback_markdown,
+                 is_teacher_overridden,
+                 reviewer_user_id,
+                 reviewed_at,
+                 created_at,
+                 updated_at
+             FROM assignment_submissions
+             WHERE assignment_id = ?
+               AND id = ?
+               AND user_id = ?`,
+            assignmentId,
+            submissionId,
+            userId,
+        );
+    }
+
     async function updateFinalReview({
         submissionId,
         finalScore,
@@ -628,10 +646,33 @@ function createAssignmentService(db) {
                  ON cm.class_id = a.class_id
                 AND cm.user_id = ?
              WHERE uf.id = ?
-               AND (cm.role = 'teacher' OR a.status IN ('published', 'closed'))
              LIMIT 1`,
             userId,
             fileId,
+        );
+    }
+
+    async function listSubmissionHistoryForStudent({ assignmentId, userId }) {
+        return db.all(
+            `SELECT
+                 id,
+                 assignment_id,
+                 user_id,
+                 submission_version,
+                 submitted_at,
+                 evaluation_status,
+                 evaluation_error_message,
+                 ai_score,
+                 ai_feedback_markdown,
+                 final_score,
+                 final_feedback_markdown,
+                 is_teacher_overridden,
+                 reviewed_at
+             FROM assignment_submissions
+             WHERE assignment_id = ? AND user_id = ?
+             ORDER BY submission_version DESC`,
+            assignmentId,
+            userId,
         );
     }
 
@@ -677,11 +718,13 @@ function createAssignmentService(db) {
         getAssignmentSummaryForStudent,
         getAssignmentSummaryForTeacher,
         getSubmissionById,
+        getSubmissionDetailForStudent,
         getSubmissionDetailForTeacher,
-        getSubmissionForAssignmentAndUser,
+        getLatestSubmissionForAssignmentAndUser,
         listAssignmentFiles,
         listAssignmentsForStudent,
         listAssignmentsForTeacher,
+        listSubmissionHistoryForStudent,
         listSubmissionFiles,
         listSubmissionsForAssignment,
         markSubmissionEvaluating,
@@ -690,7 +733,7 @@ function createAssignmentService(db) {
         storeSubmissionEvaluation,
         updateAssignment,
         updateFinalReview,
-        upsertSubmission,
+        createSubmission,
     };
 }
 
