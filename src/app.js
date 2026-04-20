@@ -21,8 +21,21 @@ function createApp(db) {
     const classEventsHub = createClassEventsHub();
     const assignmentEventsHub = createAssignmentEventsHub();
     const solochatGradingEventsHub = createSoloChatGradingEventsHub();
+    const ALLOWED_ORIGINS = (process.env.CORS_ORIGIN || "http://localhost:5173")
+        .split(",")
+        .map((s) => s.trim());
+
     const corsOptions = {
-        origin: process.env.CORS_ORIGIN || "http://localhost:5173",
+        origin: (origin, callback) => {
+            // allow requests with no origin (e.g. curl, mobile apps)
+            if (!origin) return callback(null, true);
+            // exact match from env list
+            if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+            // allow any Netlify deploy-preview / branch-deploy / production
+            if (/^https:\/\/[a-z0-9-]+--mechhub\.netlify\.app$/.test(origin))
+                return callback(null, true);
+            callback(new Error(`CORS: origin not allowed — ${origin}`));
+        },
         credentials: true,
         methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
         allowedHeaders: ["Content-Type", "Authorization"],
