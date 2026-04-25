@@ -1,5 +1,11 @@
 const express = require("express");
-const { getUserById, sanitizeUser } = require("../lib/users");
+const bcrypt = require("bcrypt");
+const {
+    getUserById,
+    sanitizeUser,
+} = require("../lib/users");
+
+const ASSIGNMENT_DUE_SOON_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function badRequest(message) {
     const error = new Error(message);
@@ -13,8 +19,269 @@ function unauthorized(message) {
     return error;
 }
 
+function serializeId(value) {
+    if (value === undefined || value === null) {
+        return null;
+    }
+
+    return String(value);
+}
+
+function computeAssignmentStatus(dueAt) {
+    if (!dueAt) {
+        return "published";
+    }
+
+    const parsed = new Date(dueAt);
+
+    if (Number.isNaN(parsed.getTime())) {
+        return "published";
+    }
+
+    const diffMs = parsed.getTime() - Date.now();
+
+    if (diffMs <= 0) {
+        return "overdue";
+    }
+
+    if (diffMs <= ASSIGNMENT_DUE_SOON_WINDOW_MS) {
+        return "due_soon";
+    }
+
+    return "published";
+}
+
+function toIsoTimestamp(value) {
+    if (!value) {
+        return null;
+    }
+
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
 async function getCurrentUser(db, userId) {
     return getUserById(db, userId);
+}
+
+async function requireCurrentUser(db, req) {
+    if (!req.session.userId) {
+        throw unauthorized("Not authenticated");
+    }
+
+    const user = await getCurrentUser(db, req.session.userId);
+
+    if (!user) {
+        req.session.destroy(() => {});
+        throw unauthorized("Not authenticated");
+    }
+
+    return user;
+}
+
+async function getDashboardAssignments(db, userId) {
+    const rows = await db.all(
+        `SELECT
+             a.id,
+             a.class_id,
+             a.title,
+             a.due_at,
+             a.updated_at,
+             c.name AS class_name,
+             c.owner_user_id,
+             cm.role AS membership_role,
+             latest.id AS latest_submission_id,
+             latest.evaluation_status AS latest_evaluation_status,
+             latest.submission_version AS latest_submission_version,
+             latest.submitted_at AS latest_submitted_at,
+             COALESCE(student_counts.total_student_count, 0) AS total_student_count,
+             COALESCE(submission_counts.submission_count, 0) AS submission_count,
+             COALESCE(submission_counts.evaluated_count, 0) AS evaluated_count
+         FROM assignments a
+         INNER JOIN classes c ON c.id = a.class_id
+         INNER JOIN class_members cm ON cm.class_id = a.class_id
+         LEFT JOIN assignment_submissions latest
+             ON latest.id = (
+                 SELECT s2.id
+                 FROM assignment_submissions s2
+                 WHERE s2.assignment_id = a.id
+                   AND s2.user_id = ?
+                 ORDER BY s2.submission_version DESC, s2.id DESC
+                 LIMIT 1
+             )
+         LEFT JOIN (
+             SELECT class_id, COUNT(*) AS total_student_count
+             FROM class_members
+             WHERE role = 'student'
+             GROUP BY class_id
+         ) student_counts ON student_counts.class_id = a.class_id
+         LEFT JOIN (
+             SELECT
+                 latest_by_user.assignment_id,
+                 COUNT(*) AS submission_count,
+                 COUNT(
+                     CASE WHEN latest_by_user.evaluation_status = 'completed'
+                     THEN 1 END
+                 ) AS evaluated_count
+             FROM assignment_submissions latest_by_user
+             INNER JOIN (
+                 SELECT assignment_id, user_id, MAX(submission_version) AS version
+                 FROM assignment_submissions
+                 GROUP BY assignment_id, user_id
+             ) latest_versions
+                 ON latest_versions.assignment_id = latest_by_user.assignment_id
+                AND latest_versions.user_id = latest_by_user.user_id
+                AND latest_versions.version = latest_by_user.submission_version
+             GROUP BY latest_by_user.assignment_id
+         ) submission_counts ON submission_counts.assignment_id = a.id
+         WHERE cm.user_id = ?
+         ORDER BY
+             CASE
+                 WHEN a.due_at IS NOT NULL AND datetime(a.due_at) >= datetime('now')
+                 THEN 0 ELSE 1
+             END,
+             datetime(a.due_at) ASC,
+             datetime(a.updated_at) DESC`,
+        userId,
+        userId,
+    );
+
+    return rows.map((row) => ({
+        id: serializeId(row.id),
+        classId: serializeId(row.class_id),
+        className: row.class_name,
+        title: row.title,
+        status: computeAssignmentStatus(row.due_at),
+        dueAt: toIsoTimestamp(row.due_at),
+        updatedAt: toIsoTimestamp(row.updated_at),
+        membershipRole: row.membership_role,
+        isOwner: row.owner_user_id === userId,
+        latestSubmission: row.latest_submission_id
+            ? {
+                  id: serializeId(row.latest_submission_id),
+                  submissionVersion: Number(row.latest_submission_version || 0),
+                  submittedAt: toIsoTimestamp(row.latest_submitted_at),
+                  evaluationStatus: row.latest_evaluation_status,
+              }
+            : null,
+        totalStudentCount: Number(row.total_student_count || 0),
+        submissionCount: Number(row.submission_count || 0),
+        evaluatedCount: Number(row.evaluated_count || 0),
+    }));
+}
+
+async function getClassSummaries(db, userId) {
+    const rows = await db.all(
+        `SELECT
+             c.id,
+             c.name,
+             c.owner_user_id,
+             c.created_at,
+             cm.role AS membership_role,
+             COALESCE(member_counts.member_count, 0) AS member_count,
+             COALESCE(assignment_counts.assignment_count, 0) AS assignment_count,
+             COALESCE(student_pending_counts.pending_count, 0) AS student_pending_count
+         FROM classes c
+         INNER JOIN class_members cm ON cm.class_id = c.id
+         LEFT JOIN (
+             SELECT class_id, COUNT(*) AS member_count
+             FROM class_members
+             GROUP BY class_id
+         ) member_counts ON member_counts.class_id = c.id
+         LEFT JOIN (
+             SELECT class_id, COUNT(*) AS assignment_count
+             FROM assignments
+             GROUP BY class_id
+         ) assignment_counts ON assignment_counts.class_id = c.id
+         LEFT JOIN (
+             SELECT a.class_id, COUNT(*) AS pending_count
+             FROM assignments a
+             LEFT JOIN assignment_submissions s
+                 ON s.id = (
+                     SELECT s2.id
+                     FROM assignment_submissions s2
+                     WHERE s2.assignment_id = a.id
+                       AND s2.user_id = ?
+                     ORDER BY s2.submission_version DESC, s2.id DESC
+                     LIMIT 1
+                 )
+             WHERE s.id IS NULL
+             GROUP BY a.class_id
+         ) student_pending_counts ON student_pending_counts.class_id = c.id
+         WHERE cm.user_id = ?
+         ORDER BY datetime(c.created_at) DESC, c.id DESC`,
+        userId,
+        userId,
+    );
+
+    return rows.map((row) => ({
+        id: serializeId(row.id),
+        name: row.name,
+        membershipRole: row.membership_role,
+        isOwner: row.owner_user_id === userId,
+        memberCount: Number(row.member_count || 0),
+        assignmentCount: Number(row.assignment_count || 0),
+        pendingCount: Number(row.student_pending_count || 0),
+        createdAt: toIsoTimestamp(row.created_at),
+    }));
+}
+
+async function getRecentConversations(db, userId) {
+    const rows = await db.all(
+        `SELECT id, title, updated_at
+         FROM solochat_conversations
+         WHERE user_id = ?
+         ORDER BY datetime(updated_at) DESC, id DESC
+         LIMIT 6`,
+        userId,
+    );
+
+    return rows.map((row) => ({
+        id: serializeId(row.id),
+        title: row.title,
+        updatedAt: toIsoTimestamp(row.updated_at),
+    }));
+}
+
+function buildDashboardStats({ classSummaries, recentAssignments, conversations }) {
+    const teachingClasses = classSummaries.filter(
+        (item) => item.membershipRole === "teacher",
+    );
+    const studentClasses = classSummaries.filter(
+        (item) => item.membershipRole === "student",
+    );
+    const studentAssignments = recentAssignments.filter(
+        (item) => item.membershipRole === "student",
+    );
+    const teacherAssignments = recentAssignments.filter(
+        (item) => item.membershipRole === "teacher",
+    );
+
+    return {
+        classCount: classSummaries.length,
+        teachingClassCount: teachingClasses.length,
+        studentClassCount: studentClasses.length,
+        assignmentCount: recentAssignments.length,
+        dueSoonCount: recentAssignments.filter((item) => item.status === "due_soon")
+            .length,
+        overdueCount: recentAssignments.filter((item) => item.status === "overdue")
+            .length,
+        pendingSubmissionCount: studentAssignments.filter(
+            (item) => !item.latestSubmission && item.status !== "overdue",
+        ).length,
+        submittedAssignmentCount: studentAssignments.filter(
+            (item) => item.latestSubmission,
+        ).length,
+        teacherSubmissionCount: teacherAssignments.reduce(
+            (sum, item) => sum + item.submissionCount,
+            0,
+        ),
+        teacherEvaluatedCount: teacherAssignments.reduce(
+            (sum, item) => sum + item.evaluatedCount,
+            0,
+        ),
+        recentConversationCount: conversations.length,
+    };
 }
 
 function createUsersRouter(db) {
@@ -22,16 +289,7 @@ function createUsersRouter(db) {
 
     router.get("/me", async (req, res, next) => {
         try {
-            if (!req.session.userId) {
-                throw unauthorized("Not authenticated");
-            }
-
-            const user = await getCurrentUser(db, req.session.userId);
-
-            if (!user) {
-                req.session.destroy(() => {});
-                throw unauthorized("Not authenticated");
-            }
+            const user = await requireCurrentUser(db, req);
 
             return res.json(sanitizeUser(user));
         } catch (err) {
@@ -39,11 +297,35 @@ function createUsersRouter(db) {
         }
     });
 
+    router.get("/me/dashboard-summary", async (req, res, next) => {
+        try {
+            const user = await requireCurrentUser(db, req);
+            const [dashboardAssignments, recentConversations, classSummaries] =
+                await Promise.all([
+                    getDashboardAssignments(db, req.session.userId),
+                    getRecentConversations(db, req.session.userId),
+                    getClassSummaries(db, req.session.userId),
+                ]);
+
+            return res.json({
+                user: sanitizeUser(user),
+                stats: buildDashboardStats({
+                    classSummaries,
+                    recentAssignments: dashboardAssignments,
+                    conversations: recentConversations,
+                }),
+                recentAssignments: dashboardAssignments.slice(0, 12),
+                recentConversations,
+                classSummaries,
+            });
+        } catch (err) {
+            return next(err);
+        }
+    });
+
     router.patch("/me", async (req, res, next) => {
         try {
-            if (!req.session.userId) {
-                throw unauthorized("Not authenticated");
-            }
+            await requireCurrentUser(db, req);
 
             const updates = [];
             const values = [];
@@ -93,6 +375,10 @@ function createUsersRouter(db) {
                 values.push(bio);
             }
 
+            if (Object.hasOwn(req.body, "defaultRole")) {
+                throw badRequest("defaultRole cannot be changed");
+            }
+
             if (updates.length === 0) {
                 throw badRequest("At least one profile field is required");
             }
@@ -113,6 +399,52 @@ function createUsersRouter(db) {
 
             const user = await getCurrentUser(db, req.session.userId);
             return res.json(sanitizeUser(user));
+        } catch (err) {
+            return next(err);
+        }
+    });
+
+    router.patch("/me/password", async (req, res, next) => {
+        try {
+            await requireCurrentUser(db, req);
+
+            const currentPassword = String(req.body?.currentPassword || "");
+            const newPassword = String(req.body?.newPassword || "");
+
+            if (!currentPassword) {
+                throw badRequest("currentPassword is required");
+            }
+
+            if (!newPassword || newPassword.length < 8) {
+                throw badRequest("newPassword must be at least 8 characters");
+            }
+
+            const user = await db.get(
+                `SELECT id, password_hash
+                 FROM users
+                 WHERE id = ?`,
+                req.session.userId,
+            );
+
+            const passwordMatches = await bcrypt.compare(
+                currentPassword,
+                user.password_hash,
+            );
+
+            if (!passwordMatches) {
+                throw unauthorized("Current password is incorrect");
+            }
+
+            const passwordHash = await bcrypt.hash(newPassword, 10);
+            await db.run(
+                `UPDATE users
+                 SET password_hash = ?
+                 WHERE id = ?`,
+                passwordHash,
+                req.session.userId,
+            );
+
+            return res.json({ message: "Password updated" });
         } catch (err) {
             return next(err);
         }
