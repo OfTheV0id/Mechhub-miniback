@@ -98,6 +98,8 @@ function createSoloChatGradingService(options = {}) {
     const conversationService =
         options.conversationService || createSoloChatConversationService(db);
 
+    const runningTasks = new Map();
+
     async function createTask({
         conversationId,
         userId,
@@ -362,6 +364,8 @@ function createSoloChatGradingService(options = {}) {
 
     async function runTask(taskId) {
         let processingRunId = null;
+        const controller = new AbortController();
+        runningTasks.set(Number(taskId), controller);
 
         try {
             const processingTask = await withImmediateTransaction(async (txDb) => {
@@ -437,6 +441,7 @@ function createSoloChatGradingService(options = {}) {
                 }),
                 temperature: 0.1,
                 maxTokens: 4000,
+                signal: controller.signal,
             })) {
                 const nextAnnotations = streamParser.pushChunk(delta);
                 for (const annotation of nextAnnotations) {
@@ -531,9 +536,16 @@ function createSoloChatGradingService(options = {}) {
             });
 
             const completedTask = await getTaskSummaryById(Number(taskId));
+            if (!completedTask) {
+                return;
+            }
             await syncGradingMessageProjection(completedTask);
             await emitTaskStatusEvent(completedTask.id);
         } catch (error) {
+            if (controller.signal.aborted) {
+                return;
+            }
+
             await db.run(
                 `UPDATE solochat_grading_tasks
                  SET status = 'failed',
@@ -556,8 +568,29 @@ function createSoloChatGradingService(options = {}) {
             }
 
             const failedTask = await getTaskSummaryById(Number(taskId));
+            if (!failedTask) {
+                return;
+            }
             await syncGradingMessageProjection(failedTask);
             await emitTaskStatusEvent(failedTask.id);
+        } finally {
+            runningTasks.delete(Number(taskId));
+        }
+    }
+
+    async function abortTasksForConversation(conversationId) {
+        const rows = await db.all(
+            `SELECT id FROM solochat_grading_tasks
+             WHERE conversation_id = ?
+               AND status IN ('pending', 'processing')`,
+            conversationId,
+        );
+        for (const row of rows) {
+            const controller = runningTasks.get(Number(row.id));
+            if (controller) {
+                controller.abort();
+                runningTasks.delete(Number(row.id));
+            }
         }
     }
 
@@ -751,6 +784,7 @@ function createSoloChatGradingService(options = {}) {
         getTaskDetailForUser,
         listTasksForConversation,
         retryTask,
+        abortTasksForConversation,
     };
 }
 

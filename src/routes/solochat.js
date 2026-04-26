@@ -519,6 +519,7 @@ function createSoloChatRouter(db, options = {}) {
 
             const attachments =
                 await fileService.listFilesForConversation(conversationId);
+            await gradingService.abortTasksForConversation(conversationId);
             await conversationService.deleteConversation({
                 conversationId,
                 userId,

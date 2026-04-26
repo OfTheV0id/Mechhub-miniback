@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -c /tmp/teacher_cookies.txt -X POST https://oftheloneliness.cn/auth/register -H 'Content-Type: application/json' -d '{\"email\":\"test@test.com\",\"password\":\"Test1234!\",\"defaultRole\":\"teacher\"}')"
+    ]
+  }
+}
