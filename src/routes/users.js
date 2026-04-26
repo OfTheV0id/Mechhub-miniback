@@ -128,7 +128,11 @@ async function getDashboardAssignments(db, userId) {
                  COUNT(
                      CASE WHEN latest_by_user.evaluation_status = 'completed'
                      THEN 1 END
-                 ) AS evaluated_count
+                 ) AS evaluated_count,
+                 COUNT(
+                     CASE WHEN latest_by_user.is_teacher_overridden = 1
+                     THEN 1 END
+                 ) AS teacher_reviewed_count
              FROM assignment_submissions latest_by_user
              INNER JOIN (
                  SELECT assignment_id, user_id, MAX(submission_version) AS version
@@ -173,6 +177,7 @@ async function getDashboardAssignments(db, userId) {
         totalStudentCount: Number(row.total_student_count || 0),
         submissionCount: Number(row.submission_count || 0),
         evaluatedCount: Number(row.evaluated_count || 0),
+        teacherReviewedCount: Number(row.teacher_reviewed_count || 0),
     }));
 }
 
@@ -284,6 +289,11 @@ function buildDashboardStats({ classSummaries, recentAssignments, conversations 
         ),
         teacherEvaluatedCount: teacherAssignments.reduce(
             (sum, item) => sum + item.evaluatedCount,
+            0,
+        ),
+        teacherPendingReviewCount: teacherAssignments.reduce(
+            (sum, item) =>
+                sum + Math.max(item.submissionCount - item.teacherReviewedCount, 0),
             0,
         ),
         recentConversationCount: conversations.length,
