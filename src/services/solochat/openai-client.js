@@ -217,6 +217,7 @@ function createOpenAiCompatibleClient(options = {}) {
     }
 
     return {
+        provider: "openai-compatible",
         createChatCompletion,
         streamChatCompletion,
     };

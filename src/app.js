@@ -13,10 +13,12 @@ const { createAuthRouter } = require("./routes/auth");
 const { createClassesRouter } = require("./routes/classes");
 const { createSoloChatRouter } = require("./routes/solochat");
 const { createUsersRouter } = require("./routes/users");
+const { createFileService } = require("./services/uploads/file-service");
 const { errorHandler } = require("./middleware/error-handler");
 
 function createApp(db) {
     const app = express();
+    const fileService = createFileService(db);
     app.set("trust proxy", 1);
     const classEventsHub = createClassEventsHub();
     const assignmentEventsHub = createAssignmentEventsHub();
@@ -60,7 +62,7 @@ function createApp(db) {
             gradingEventsHub: solochatGradingEventsHub,
         }),
     );
-    app.use("/users", createUsersRouter(db));
+    app.use("/users", createUsersRouter(db, { fileService }));
 
     app.use((req, res) => {
         res.status(404).json({ message: "Not found" });

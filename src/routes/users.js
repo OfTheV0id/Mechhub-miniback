@@ -1,9 +1,15 @@
 const express = require("express");
 const bcrypt = require("bcrypt");
+const multer = require("multer");
 const {
     getUserById,
     sanitizeUser,
 } = require("../lib/users");
+
+const avatarUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+});
 
 const ASSIGNMENT_DUE_SOON_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -284,7 +290,7 @@ function buildDashboardStats({ classSummaries, recentAssignments, conversations 
     };
 }
 
-function createUsersRouter(db) {
+function createUsersRouter(db, { fileService } = {}) {
     const router = express.Router();
 
     router.get("/me", async (req, res, next) => {
@@ -399,6 +405,71 @@ function createUsersRouter(db) {
 
             const user = await getCurrentUser(db, req.session.userId);
             return res.json(sanitizeUser(user));
+        } catch (err) {
+            return next(err);
+        }
+    });
+
+    router.post(
+        "/me/avatar",
+        (req, res, next) => avatarUpload.single("avatar")(req, res, next),
+        async (req, res, next) => {
+            try {
+                const user = await requireCurrentUser(db, req);
+
+                if (!req.file) {
+                    throw badRequest("avatar file is required");
+                }
+
+                const mimeType = String(req.file.mimetype || "").toLowerCase();
+                if (!mimeType.startsWith("image/")) {
+                    throw badRequest("avatar must be an image file");
+                }
+
+                const fileRecord = await fileService.processImageUpload({
+                    userId: user.id,
+                    file: req.file,
+                    subDir: "avatars",
+                });
+
+                const relativeUrl = `/users/avatars/${fileRecord.id}`;
+
+                await db.run(
+                    `UPDATE users SET avatar_url = ? WHERE id = ?`,
+                    relativeUrl,
+                    user.id,
+                );
+
+                const updatedUser = await getCurrentUser(db, user.id);
+                return res.json(sanitizeUser(updatedUser));
+            } catch (err) {
+                return next(err);
+            }
+        },
+    );
+
+    router.get("/avatars/:fileId", async (req, res, next) => {
+        try {
+            const fileId = Number(req.params.fileId);
+            if (!Number.isInteger(fileId) || fileId <= 0) {
+                throw badRequest("invalid fileId");
+            }
+
+            const file = await db.get(
+                `SELECT id, storage_path, mime_type FROM uploaded_files WHERE id = ?`,
+                fileId,
+            );
+
+            const normalizedPath = file?.storage_path?.replace(/\\/g, "/") ?? "";
+            if (!file || !normalizedPath.includes("/avatars/")) {
+                const err = new Error("Not found");
+                err.statusCode = 404;
+                throw err;
+            }
+
+            res.setHeader("Content-Type", file.mime_type || "image/webp");
+            res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+            return res.sendFile(file.storage_path);
         } catch (err) {
             return next(err);
         }

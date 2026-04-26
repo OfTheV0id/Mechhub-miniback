@@ -16,6 +16,10 @@ function createGeminiClient(options = {}) {
         temperature = 0.7,
         model,
         maxTokens,
+        responseMimeType,
+        responseSchema,
+        thinkingBudget,
+        thinkingLevel,
         signal: requestSignal,
     }) {
         const resolvedModel = validateConfig(model);
@@ -30,6 +34,10 @@ function createGeminiClient(options = {}) {
                 systemInstruction,
                 temperature,
                 maxTokens,
+                responseMimeType,
+                responseSchema,
+                thinkingBudget,
+                thinkingLevel,
             });
 
             const response = await fetch(url, {
@@ -75,6 +83,10 @@ function createGeminiClient(options = {}) {
         temperature = 0.7,
         model,
         maxTokens,
+        responseMimeType,
+        responseSchema,
+        thinkingBudget,
+        thinkingLevel,
         signal: requestSignal,
     }) {
         const resolvedModel = validateConfig(model);
@@ -89,6 +101,10 @@ function createGeminiClient(options = {}) {
                 systemInstruction,
                 temperature,
                 maxTokens,
+                responseMimeType,
+                responseSchema,
+                thinkingBudget,
+                thinkingLevel,
             });
 
             const response = await fetch(url, {
@@ -182,18 +198,49 @@ function createGeminiClient(options = {}) {
     }
 
     return {
+        provider: "gemini",
         createChatCompletion,
         streamChatCompletion,
     };
 }
 
-function buildRequestBody({ contents, systemInstruction, temperature, maxTokens }) {
+function buildRequestBody({
+    contents,
+    systemInstruction,
+    temperature,
+    maxTokens,
+    responseMimeType,
+    responseSchema,
+    thinkingBudget,
+    thinkingLevel,
+}) {
+    const generationConfig = {
+        temperature,
+        ...(maxTokens ? { maxOutputTokens: maxTokens } : {}),
+        ...(responseMimeType ? { responseMimeType } : {}),
+        ...(responseSchema ? { responseSchema } : {}),
+    };
+    const resolvedThinkingLevel = normalizeThinkingLevel(
+        thinkingLevel ?? process.env.GEMINI_THINKING_LEVEL,
+    );
+    const resolvedThinkingBudget = parseOptionalInteger(
+        thinkingBudget ?? process.env.GEMINI_THINKING_BUDGET,
+    );
+
+    if (resolvedThinkingLevel) {
+        generationConfig.thinkingConfig = {
+            thinkingLevel: resolvedThinkingLevel,
+        };
+    } else if (resolvedThinkingBudget !== null) {
+        generationConfig.thinkingConfig = {
+            thinkingBudget: resolvedThinkingBudget,
+            includeThoughts: false,
+        };
+    }
+
     return {
         contents,
-        generationConfig: {
-            temperature,
-            ...(maxTokens ? { maxOutputTokens: maxTokens } : {}),
-        },
+        generationConfig,
         ...(systemInstruction ? { systemInstruction } : {}),
     };
 }
@@ -345,6 +392,30 @@ function parseTimeoutMs(value, fallbackMs) {
     }
 
     return Math.trunc(parsed);
+}
+
+function parseOptionalInteger(value) {
+    if (value === undefined || value === null || value === "") {
+        return null;
+    }
+
+    const parsed = Number(value);
+
+    if (!Number.isFinite(parsed)) {
+        return null;
+    }
+
+    return Math.trunc(parsed);
+}
+
+function normalizeThinkingLevel(value) {
+    const normalized = String(value || "")
+        .trim()
+        .toLowerCase();
+
+    return ["minimal", "low", "medium", "high"].includes(normalized)
+        ? normalized
+        : "";
 }
 
 function startAbortTimer(controller, timeoutMs) {

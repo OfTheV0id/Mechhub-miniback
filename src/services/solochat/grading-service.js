@@ -5,6 +5,12 @@ const { createFileService } = require("../uploads/file-service");
 const { createSoloChatConversationService } = require("./conversation-service");
 const { createOpenAiCompatibleClient } = require("./openai-client");
 const {
+    createChatClient,
+    createGradingClient,
+} = require("./ai-client-factory");
+const { createDashScopeOcrClient } = require("./dashscope-ocr-client");
+const { createMathpixOcrClient } = require("./mathpix-ocr-client");
+const {
     generateConversationTitle,
     generateGradingTitle,
 } = require("./ai-service");
@@ -16,8 +22,46 @@ const {
 } = require("./math-normalizer");
 
 const CONTEXT_TEXT_MAX_CHARS = 12000;
+const OCR_BLOCK_TEXT_MAX_CHARS = 220;
+const OCR_BLOCKS_PER_IMAGE_MAX = 120;
 const ALLOWED_SEVERITIES = new Set(["correct", "warning", "error", "note"]);
-const GRADING_PROMPT = `
+const DEFAULT_GRADING_MAX_TOKENS = 4000;
+const DEFAULT_GEMINI_GRADING_MAX_TOKENS = 12000;
+const GEMINI_GRADING_RESPONSE_SCHEMA = {
+    type: "ARRAY",
+    items: {
+        type: "OBJECT",
+        properties: {
+            type: { type: "STRING" },
+            fileIndex: { type: "INTEGER" },
+            pageIndex: { type: "INTEGER" },
+            orderIndex: { type: "INTEGER" },
+            ocrBlockIds: {
+                type: "ARRAY",
+                items: { type: "STRING" },
+            },
+            recognizedText: { type: "STRING" },
+            recognizedFormula: { type: "STRING" },
+            commentary: { type: "STRING" },
+            severity: {
+                type: "STRING",
+                enum: ["correct", "warning", "error", "note"],
+            },
+        },
+        required: [
+            "type",
+            "fileIndex",
+            "pageIndex",
+            "orderIndex",
+            "ocrBlockIds",
+            "recognizedText",
+            "recognizedFormula",
+            "commentary",
+            "severity",
+        ],
+    },
+};
+const LEGACY_GRADING_PROMPT = `
 你是一名正在批改学生主观题作业的老师。
 只输出 JSON 对象流，不要包含 markdown 代码块或任何其他文字。
 你可能收到可选的题目文本、可选的参考文档，以及一张或多张作业图片。
@@ -46,7 +90,44 @@ commentary 中如果包含数学表达式，同样使用 KaTeX/LaTeX 语法，�
 若所有图片均无有效标注，则不输出任何内容。
 `.trim();
 
-const OCR_PROMPT = `Read all the text in the image. Output the results in the format: <ocr>text content</ocr><bbox>x1,y1,x2,y2</bbox> for each text block.`;
+const OCR_PROMPT = `Read all text in the image. Output one text block per line using this exact CSV format: x,y,height,width,angle,text. Use pixel coordinates from the original image. Do not output markdown or explanations.`;
+const GRADING_BLOCK_PROMPT = `
+你是一名正在批改学生主观题作业的老师。
+你会收到题目/参考资料、作业图片，以及每张图片的 OCR 文本块列表。
+OCR 文本块已经包含稳定的 block id 和位置。你只负责判断哪些 OCR 文本块应该被批注，不要自己编写坐标。
+
+输出规则：
+- 只输出 JSON 对象流，不要输出 markdown、数组、解释文字或额外前后缀。
+- 第一个可见字符必须是 {，禁止输出 markdown 代码块围栏。
+- 每次输出一个完整 JSON 对象；多个标注就连续输出多个 JSON 对象。
+- JSON 对象只能包含下方列出的字段，不要复制 OCR_BLOCKS，不要添加 blocks、bbox、analysis、reasoning 等额外字段。
+- 所有说明性内容必须使用简体中文。
+- commentary 必须使用简体中文。
+- recognizedFormula 必须使用 KaTeX/LaTeX 语法。
+- 禁止在 recognizedFormula 中使用 Unicode 数学符号（如 ⇒ → − ≤ ≥ ≠ × ·），应使用 LaTeX 命令（如 \\Rightarrow \\to - \\le \\ge \\ne \\times \\cdot）。
+- commentary 中如果包含数学表达式，同样使用 KaTeX/LaTeX 语法，避免 Unicode 数学符号。
+- 必须逐一检查每张上传图片，返回所有应该标注的问题，不要在找到第一个问题后停止。
+- 如果某张图片无需标注，跳过该图片；如果所有图片都无需标注，不输出任何内容。
+
+定位规则：
+- ocrBlockIds 必须从用户提供的 OCR_BLOCKS 中选择，不能编造 id。
+- ocrBlockIds 只放 id 字符串，例如 ["img0_block3"]。
+- ocrBlockIds 应选择最能覆盖该批注区域的一个或多个 OCR block。
+- 如果一个错误跨越多行或多个公式块，返回多个 ocrBlockIds。
+- 不要输出 bbox 坐标；后端会根据 ocrBlockIds 合并 bbox。
+- 不要依赖 OCR 文本完全正确。请同时看图片和 OCR 文本，判断哪个 block 最接近你要批注的位置。
+
+每个标注对象必须包含：
+- type: "annotation"
+- fileIndex: 从 0 开始的图片列表索引
+- pageIndex: 整数，单张图片始终为 0
+- orderIndex: 该图片内的标注顺序（从 0 开始）
+- ocrBlockIds: 字符串数组，来自 OCR_BLOCKS 的 id
+- recognizedText: 该区域的原文转录；优先使用 OCR 文本，必要时根据图片修正
+- recognizedFormula: 该区域包含的数学公式；无公式时为空字符串
+- commentary: 对该处问题的简体中文说明
+- severity: 以下之一：correct、warning、error、note
+`.trim();
 
 const MIN_BBOX_SIZE = 0.001;
 
@@ -78,27 +159,67 @@ function serializeId(value) {
     return String(value);
 }
 
+function normalizeOcrProvider(value) {
+    const normalized = String(value || "openai")
+        .trim()
+        .toLowerCase();
+
+    if (normalized === "dashscope" || normalized === "qwen") {
+        return "dashscope";
+    }
+
+    if (normalized === "mathpix") {
+        return "mathpix";
+    }
+
+    return "openai";
+}
+
+function createOcrClient(provider) {
+    if (provider === "dashscope") {
+        return createDashScopeOcrClient();
+    }
+
+    if (provider === "mathpix") {
+        return createMathpixOcrClient();
+    }
+
+    return createOpenAiCompatibleClient({
+        defaultModel: process.env.OPENAI_OCR_MODEL || "qwen-vl-ocr",
+    });
+}
+
+function resolveGradingMaxTokens(useGeminiJsonMode) {
+    const specificValue = useGeminiJsonMode
+        ? process.env.GEMINI_GRADING_MAX_TOKENS
+        : process.env.OPENAI_GRADING_MAX_TOKENS;
+    const fallbackValue = process.env.GRADING_MAX_TOKENS;
+    const defaultValue = useGeminiJsonMode
+        ? DEFAULT_GEMINI_GRADING_MAX_TOKENS
+        : DEFAULT_GRADING_MAX_TOKENS;
+
+    return parsePositiveInteger(specificValue || fallbackValue, defaultValue);
+}
+
+function parsePositiveInteger(value, fallback) {
+    const parsed = Number(value);
+
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return fallback;
+    }
+
+    return Math.trunc(parsed);
+}
+
 function createSoloChatGradingService(options = {}) {
     const db = options.db;
     const gradingEventsHub = options.gradingEventsHub;
-    const gradingClient =
-        options.client ||
-        createOpenAiCompatibleClient({
-            defaultModel:
-                process.env.OPENAI_GRADING_MODEL ||
-                process.env.OPENAI_MODEL,
-        });
-    const ocrClient =
-        options.ocrClient ||
-        createOpenAiCompatibleClient({
-            defaultModel: "qwen-vl-ocr",
-        });
-    const titleClient =
-        options.titleClient ||
-        createOpenAiCompatibleClient({
-            defaultModel:
-                process.env.OPENAI_CHAT_MODEL || process.env.OPENAI_MODEL,
-        });
+    const gradingClient = options.client || createGradingClient();
+    const ocrProvider = normalizeOcrProvider(
+        options.ocrProvider || process.env.OCR_PROVIDER,
+    );
+    const ocrClient = options.ocrClient || createOcrClient(ocrProvider);
+    const titleClient = options.titleClient || createChatClient();
     const fileService = options.fileService || createFileService(db);
     const conversationService =
         options.conversationService || createSoloChatConversationService(db);
@@ -431,62 +552,65 @@ function createSoloChatGradingService(options = {}) {
                 );
             }
 
-            // Step 1: stream grading analysis (no bbox — sourceText only)
+            // Step 1: run OCR first so the grading model can select block ids.
+            const ocrBlocksByFileIndex = await loadOcrBlocksForImages({
+                ocrClient,
+                imageAttachments,
+                attachmentService: fileService,
+                signal: controller.signal,
+            });
+            const ocrBlockById = buildOcrBlockLookup(ocrBlocksByFileIndex);
+
+            // Step 2: stream grading analysis. Each annotation already carries
+            // OCR block ids, so bbox resolution is a deterministic merge.
             const annotations = [];
-            const streamParser = createStreamAnnotationParser(imageAttachments);
+            const streamParser = createStreamAnnotationParser(
+                imageAttachments,
+                ocrBlockById,
+            );
+            const useGeminiJsonMode = gradingClient.provider === "gemini";
+            const gradingMessages = await buildGradingMessages({
+                promptText: processingTask.promptText,
+                imageAttachments,
+                contextAttachments,
+                attachmentService: fileService,
+                ocrBlocksByFileIndex,
+                jsonArrayMode: useGeminiJsonMode,
+            });
+            const gradingMaxTokens = resolveGradingMaxTokens(useGeminiJsonMode);
+            let streamIndex = 0;
+
+            const queueAnnotationEvent = (annotation) => {
+                annotations.push(annotation);
+                const currentStreamIndex = streamIndex;
+                streamIndex += 1;
+                if (!controller.signal.aborted) {
+                    emitTaskAnnotationEvent(
+                        processingTask,
+                        annotation,
+                        currentStreamIndex,
+                    );
+                }
+            };
 
             for await (const delta of gradingClient.streamChatCompletion({
-                messages: await buildGradingMessages({
-                    promptText: processingTask.promptText,
-                    imageAttachments,
-                    contextAttachments,
-                    attachmentService: fileService,
-                }),
-                temperature: 0.1,
-                maxTokens: 4000,
+                messages: gradingMessages,
+                temperature: useGeminiJsonMode ? 0 : 0.1,
+                maxTokens: gradingMaxTokens,
+                ...(useGeminiJsonMode
+                    ? {
+                          responseMimeType: "application/json",
+                          responseSchema: GEMINI_GRADING_RESPONSE_SCHEMA,
+                      }
+                    : {}),
                 signal: controller.signal,
             })) {
                 for (const annotation of streamParser.pushChunk(delta)) {
-                    annotations.push(annotation);
+                    queueAnnotationEvent(annotation);
                 }
             }
             for (const annotation of streamParser.finish()) {
-                annotations.push(annotation);
-            }
-
-            // Step 2: OCR each image and match sourceText → precise bbox
-            const annotationsByFileIndex = new Map();
-            for (const annotation of annotations) {
-                const idx = annotation.fileIndex;
-                if (!annotationsByFileIndex.has(idx)) {
-                    annotationsByFileIndex.set(idx, []);
-                }
-                annotationsByFileIndex.get(idx).push(annotation);
-            }
-
-            for (const [fileIndex, imageAnnotations] of annotationsByFileIndex) {
-                if (controller.signal.aborted) break;
-                await runOcrMatchingForImage(
-                    ocrClient,
-                    imageAttachments[fileIndex],
-                    imageAnnotations,
-                    fileService,
-                    controller.signal,
-                );
-            }
-
-            // Fallback bbox for any annotation OCR could not locate
-            for (const annotation of annotations) {
-                if (!annotation.bbox) {
-                    annotation.bbox = buildFallbackBbox(annotation.orderIndex);
-                }
-            }
-
-            // Emit all annotations with finalized bboxes
-            let streamIndex = 0;
-            for (const annotation of annotations) {
-                emitTaskAnnotationEvent(processingTask, annotation, streamIndex);
-                streamIndex += 1;
+                queueAnnotationEvent(annotation);
             }
 
             annotations.sort(compareAnnotations);
@@ -816,8 +940,18 @@ async function buildGradingMessages({
     imageAttachments,
     contextAttachments,
     attachmentService,
+    ocrBlocksByFileIndex = new Map(),
+    jsonArrayMode = false,
 }) {
     const userContent = [];
+
+    if (jsonArrayMode) {
+        userContent.push({
+            type: "text",
+            text:
+                "Output mode override: return exactly one JSON array. Each array item must be one annotation object with the required fields. Do not output markdown, comments, tables, or text outside the JSON array. If there are no annotations, return [].",
+        });
+    }
 
     if (String(promptText || "").trim()) {
         userContent.push({
@@ -846,6 +980,13 @@ async function buildGradingMessages({
             type: "text",
             text: `Homework image index ${index}: ${attachment.file_name}`,
         });
+        userContent.push({
+            type: "text",
+            text: formatOcrBlocksForPrompt(
+                index,
+                ocrBlocksByFileIndex.get(index) || [],
+            ),
+        });
     });
 
     for (const attachment of imageAttachments) {
@@ -860,7 +1001,7 @@ async function buildGradingMessages({
     return [
         {
             role: "system",
-            content: GRADING_PROMPT,
+            content: GRADING_BLOCK_PROMPT,
         },
         {
             role: "user",
@@ -869,10 +1010,45 @@ async function buildGradingMessages({
     ];
 }
 
+function formatOcrBlocksForPrompt(fileIndex, blocks) {
+    const items = (Array.isArray(blocks) ? blocks : [])
+        .slice(0, OCR_BLOCKS_PER_IMAGE_MAX)
+        .map((block) => ({
+            id: block.id,
+            text: truncateText(block.text, OCR_BLOCK_TEXT_MAX_CHARS),
+            bbox: roundBbox(block.bbox),
+        }));
+
+    return `OCR_BLOCKS for image ${fileIndex}:\n${JSON.stringify(items)}`;
+}
+
+function roundBbox(bbox) {
+    if (!bbox) {
+        return null;
+    }
+
+    return {
+        x: roundNumber(bbox.x),
+        y: roundNumber(bbox.y),
+        width: roundNumber(bbox.width),
+        height: roundNumber(bbox.height),
+    };
+}
+
+function roundNumber(value) {
+    return Math.round(Number(value || 0) * 10000) / 10000;
+}
+
+function truncateText(value, limit) {
+    const text = String(value || "");
+    return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+
 function parseStreamAnnotationObject(
     objectText,
     fallbackOrderIndex,
     imageAttachments,
+    ocrBlockById,
 ) {
     let parsed;
 
@@ -886,10 +1062,15 @@ function parseStreamAnnotationObject(
         throw badRequest("AI stream emitted an invalid annotation event");
     }
 
-    return normalizeAnnotation(parsed, fallbackOrderIndex, imageAttachments);
+    return normalizeAnnotation(
+        parsed,
+        fallbackOrderIndex,
+        imageAttachments,
+        ocrBlockById,
+    );
 }
 
-function createStreamAnnotationParser(imageAttachments) {
+function createStreamAnnotationParser(imageAttachments, ocrBlockById) {
     let objectBuffer = "";
     let braceDepth = 0;
     let inString = false;
@@ -907,9 +1088,7 @@ function createStreamAnnotationParser(imageAttachments) {
                 }
 
                 if (char !== "{") {
-                    throw badRequest(
-                        "AI stream emitted invalid content outside annotation objects",
-                    );
+                    continue;
                 }
 
                 objectBuffer = "{";
@@ -960,6 +1139,7 @@ function createStreamAnnotationParser(imageAttachments) {
                             objectBuffer,
                             parsedCount,
                             imageAttachments,
+                            ocrBlockById,
                         ),
                     );
                     parsedCount += 1;
@@ -989,7 +1169,12 @@ function createStreamAnnotationParser(imageAttachments) {
     };
 }
 
-function normalizeAnnotation(annotation, fallbackOrderIndex, imageAttachments) {
+function normalizeAnnotation(
+    annotation,
+    fallbackOrderIndex,
+    imageAttachments,
+    ocrBlockById,
+) {
     if (!annotation || typeof annotation !== "object") {
         throw badRequest("AI annotation item must be an object");
     }
@@ -1021,17 +1206,56 @@ function normalizeAnnotation(annotation, fallbackOrderIndex, imageAttachments) {
         throw badRequest("AI annotation severity is invalid");
     }
 
+    const ocrBlockIds = normalizeOcrBlockIds(annotation.ocrBlockIds);
+    const selectedBlocks = ocrBlockIds
+        .map((blockId) => ocrBlockById.get(blockId))
+        .filter((block) => block && block.fileIndex === fileIndex);
+    const bbox = mergeOcrBlockBboxes(selectedBlocks) ||
+        buildFallbackBbox(orderIndex);
+    const recognizedText = String(annotation.recognizedText || "").trim() ||
+        selectedBlocks.map((block) => block.text).join("\n");
+
     return {
         fileIndex,
         fileId: imageAttachments[fileIndex].id,
         pageIndex,
         orderIndex,
-        bbox: null, // filled in by OCR matching
+        bbox,
+        ocrBlockIds: selectedBlocks.map((block) => block.id),
         sourceText: String(annotation.sourceText || "").trim(),
-        recognizedText: String(annotation.recognizedText || "").trim(),
+        recognizedText,
         recognizedFormula: normalizeFormulaText(annotation.recognizedFormula),
         commentary: normalizeCommentaryText(annotation.commentary),
         severity,
+    };
+}
+
+function normalizeOcrBlockIds(value) {
+    const rawIds = Array.isArray(value)
+        ? value
+        : value === undefined || value === null
+          ? []
+          : [value];
+    return [...new Set(rawIds.map((id) => String(id || "").trim()).filter(Boolean))];
+}
+
+function mergeOcrBlockBboxes(blocks) {
+    const validBlocks = (Array.isArray(blocks) ? blocks : [])
+        .map((block) => block?.bbox)
+        .filter(Boolean);
+    if (!validBlocks.length) {
+        return null;
+    }
+
+    const minX = Math.min(...validBlocks.map((bbox) => bbox.x));
+    const minY = Math.min(...validBlocks.map((bbox) => bbox.y));
+    const maxX = Math.max(...validBlocks.map((bbox) => bbox.x + bbox.width));
+    const maxY = Math.max(...validBlocks.map((bbox) => bbox.y + bbox.height));
+    return {
+        x: clamp(minX, 0, 1 - MIN_BBOX_SIZE),
+        y: clamp(minY, 0, 1 - MIN_BBOX_SIZE),
+        width: clamp(maxX - minX, MIN_BBOX_SIZE, 1 - minX),
+        height: clamp(maxY - minY, MIN_BBOX_SIZE, 1 - minY),
     };
 }
 
@@ -1047,46 +1271,90 @@ const OCR_BBOX_PADDING_X = 0.008;
 const OCR_BBOX_PADDING_Y = 0.012;
 const OCR_BBOX_MIN_HEIGHT = 0.04;
 
-async function runOcrMatchingForImage(
+async function loadOcrBlocksForImages({
+    ocrClient,
+    imageAttachments,
+    attachmentService,
+    signal,
+}) {
+    const entries = await Promise.all(
+        imageAttachments.map(async (attachment, fileIndex) => {
+            const blocks = await loadOcrBlocksForImage(
+                ocrClient,
+                attachment,
+                attachmentService,
+                signal,
+            );
+            return [
+                fileIndex,
+                blocks.map((block, blockIndex) => ({
+                    ...block,
+                    id: `img${fileIndex}_block${blockIndex}`,
+                    fileIndex,
+                    blockIndex,
+                })),
+            ];
+        }),
+    );
+
+    return new Map(entries);
+}
+
+function buildOcrBlockLookup(ocrBlocksByFileIndex) {
+    const lookup = new Map();
+    for (const blocks of ocrBlocksByFileIndex.values()) {
+        for (const block of blocks) {
+            lookup.set(block.id, block);
+        }
+    }
+    return lookup;
+}
+
+async function loadOcrBlocksForImage(
     ocrClient,
     imageAttachment,
-    annotations,
     attachmentService,
     signal,
 ) {
     const imgW = Number(imageAttachment.width) || 0;
     const imgH = Number(imageAttachment.height) || 0;
-    if (imgW <= 0 || imgH <= 0) return;
+    if (imgW <= 0 || imgH <= 0) return [];
 
-    let responseText;
+    let ocrBlocks;
     try {
-        const imageDataUrl = await attachmentService.buildDataUrl(imageAttachment);
-        responseText = await ocrClient.createChatCompletion({
-            messages: [{
-                role: "user",
-                content: [
-                    { type: "image_url", image_url: { url: imageDataUrl } },
-                    { type: "text", text: OCR_PROMPT },
-                ],
-            }],
-            temperature: 0,
-            signal,
-        });
-    } catch (_error) {
-        return;
-    }
-
-    const ocrBlocks = parseOcrResponse(responseText, imgW, imgH);
-    if (!ocrBlocks.length) return;
-
-    for (const annotation of annotations) {
-        const query = annotation.sourceText || annotation.recognizedText;
-        if (!query) continue;
-        const match = findBestOcrMatch(query, ocrBlocks);
-        if (match) {
-            annotation.bbox = match;
+        const imageDataUrl =
+            await attachmentService.buildDataUrl(imageAttachment);
+        if (typeof ocrClient.recognizeImage === "function") {
+            ocrBlocks = await ocrClient.recognizeImage({
+                imageDataUrl,
+                signal,
+            });
+        } else {
+            const responseText = await ocrClient.createChatCompletion({
+                messages: [{
+                    role: "user",
+                    content: [
+                        { type: "image_url", image_url: { url: imageDataUrl } },
+                        { type: "text", text: OCR_PROMPT },
+                    ],
+                }],
+                temperature: 0,
+                signal,
+            });
+            ocrBlocks = parseOcrResponse(responseText, imgW, imgH);
         }
+    } catch (error) {
+        if (!signal?.aborted) {
+            console.warn(
+                "Failed to run grading OCR matching",
+                imageAttachment.id,
+                error,
+            );
+        }
+        return [];
     }
+
+    return normalizeOcrBlocksForMatching(ocrBlocks, imgW, imgH);
 }
 
 // Parse the CSV-per-line OCR response: "x1,y1,h,w,angle,text..."
@@ -1132,6 +1400,66 @@ function parseOcrResponse(text, imgW, imgH) {
         });
     }
     return blocks;
+}
+
+function normalizeOcrBlocksForMatching(blocks, imgW, imgH) {
+    return (Array.isArray(blocks) ? blocks : [])
+        .map((block) => {
+            const text = String(block?.text || "").trim();
+            const bbox = normalizeOcrBbox(
+                block?.bbox,
+                block?.bboxPixels,
+                imgW,
+                imgH,
+            );
+            if (!text || !bbox) {
+                return null;
+            }
+
+            return {
+                ...block,
+                text,
+                normalizedText: normalizeForOcrMatch(text),
+                bbox,
+            };
+        })
+        .filter(Boolean);
+}
+
+function normalizeOcrBbox(bbox, bboxPixels, imgW, imgH) {
+    const normalizedBbox =
+        bbox ||
+        (bboxPixels && imgW > 0 && imgH > 0
+            ? {
+                  x: Number(bboxPixels.x) / imgW,
+                  y: Number(bboxPixels.y) / imgH,
+                  width: Number(bboxPixels.width) / imgW,
+                  height: Number(bboxPixels.height) / imgH,
+              }
+            : null);
+    const x = Number(normalizedBbox?.x);
+    const y = Number(normalizedBbox?.y);
+    const width = Number(normalizedBbox?.width);
+    const height = Number(normalizedBbox?.height);
+    if (
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        !Number.isFinite(width) ||
+        !Number.isFinite(height) ||
+        width <= 0 ||
+        height <= 0
+    ) {
+        return null;
+    }
+
+    const clampedX = clamp(x, 0, 1 - MIN_BBOX_SIZE);
+    const clampedY = clamp(y, 0, 1 - MIN_BBOX_SIZE);
+    return {
+        x: clampedX,
+        y: clampedY,
+        width: clamp(width, MIN_BBOX_SIZE, 1 - clampedX),
+        height: clamp(height, MIN_BBOX_SIZE, 1 - clampedY),
+    };
 }
 
 function findBestOcrMatch(query, ocrBlocks) {
