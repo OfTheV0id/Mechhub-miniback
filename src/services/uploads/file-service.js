@@ -5,6 +5,7 @@ const sharp = require("sharp");
 const { SQLITE_NOW_ISO_EXPRESSION } = require("../../lib/time");
 const {
     SOLOCHAT_DOCUMENT_PREVIEW_MAX_CHARS,
+    isAllowedSoloChatBinaryDocument,
     isAllowedSoloChatDocument,
     isSoloChatImageFileName,
     isSoloChatImageMimeType,
@@ -17,6 +18,7 @@ const WEBP_QUALITY = 80;
 const FILE_KINDS = {
     IMAGE: "image",
     TEXT: "text",
+    DOCUMENT: "document",
 };
 
 function badRequest(message) {
@@ -536,7 +538,7 @@ function normalizeSoloChatTextUpload(file) {
         })
     ) {
         throw badRequest(
-            "solochat only supports images or approved text/code documents",
+            "solochat only supports images, approved text/code documents, or binary documents (PDF/DOCX/PPTX/XLSX)",
         );
     }
 
@@ -547,13 +549,26 @@ function normalizeSoloChatTextUpload(file) {
 }
 
 async function normalizeSoloChatUpload(file) {
-    return isSoloChatImageMimeType(file.mimetype) ||
-        (!String(file.mimetype || "").trim() ||
-            String(file.mimetype || "").trim().toLowerCase() ===
-                "application/octet-stream") &&
-            isSoloChatImageFileName(file.originalname)
-        ? normalizeSoloChatImageUpload(file)
-        : normalizeSoloChatTextUpload(file);
+    const mimeType = String(file.mimetype || "").trim().toLowerCase();
+    const isImageByMime = isSoloChatImageMimeType(mimeType);
+    const isImageByName =
+        (!mimeType || mimeType === "application/octet-stream") &&
+        isSoloChatImageFileName(file.originalname);
+
+    if (isImageByMime || isImageByName) {
+        return normalizeSoloChatImageUpload(file);
+    }
+
+    if (
+        isAllowedSoloChatBinaryDocument({
+            mimeType: file.mimetype,
+            fileName: file.originalname,
+        })
+    ) {
+        return { ...file, kind: FILE_KINDS.DOCUMENT };
+    }
+
+    return normalizeSoloChatTextUpload(file);
 }
 
 function normalizeIds(values) {

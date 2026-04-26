@@ -1,4 +1,4 @@
-const { createOpenAiCompatibleClient } = require("./openai-client");
+const { createChatClient } = require("./ai-client-factory");
 const {
     createMarkdownMathStreamNormalizer,
 } = require("./math-normalizer");
@@ -6,27 +6,24 @@ const {
 const TITLE_MAX_LENGTH = 60;
 
 function createChatTitleClient() {
-    return createOpenAiCompatibleClient({
-        defaultModel:
-            process.env.OPENAI_CHAT_MODEL || process.env.OPENAI_MODEL,
-    });
+    return createChatClient();
 }
 const SOLOCHAT_SYSTEM_PROMPT = `
-Your name is MechHub SoloChat.
-When you write mathematical expressions, use KaTeX/LaTeX-compatible syntax.
-Do not use Unicode math symbols such as ⇒, →, −, ≤, ≥, ≠, ×, · in formulas.
-Prefer LaTeX commands such as \\Rightarrow, \\to, -, \\le, \\ge, \\ne, \\times, \\cdot.
+你是 MechHub SoloChat，一个面向学生的智能学习助手。
+默认使用中文回复，除非用户明确使用其他语言提问。
+回答应简洁、准确，适合学生理解。
+书写数学公式时使用 KaTeX/LaTeX 语法。
+禁止在公式中使用 Unicode 数学符号（如 ⇒ → − ≤ ≥ ≠ × ·），应使用 LaTeX 命令（如 \\Rightarrow \\to - \\le \\ge \\ne \\times \\cdot）。
 `.trim();
 const TITLE_PROMPT =
-    "请根据用户的首发消息生成一个简短自然的中文对话标题。标题要概括实际主题，不要返回“对话标题生成”“聊天标题”“会话标题”“新对话”这类泛化标题。只返回标题本身，不加引号，不超过10个字。";
+    `请根据用户的首发消息生成一个简短自然的中文对话标题。标题要概括实际主题，不要返回”对话标题生成””聊天标题””会话标题””新对话”这类泛化标题。只返回标题本身，不加引号，不超过10个字。`;
 const TITLE_TEXT_LIMIT = 200;
 const TITLE_DOCUMENT_TEXT_LIMIT = 800;
 const GRADING_TITLE_PROMPT = `
-Generate a short natural Chinese title for a homework grading result.
-The title should summarize the grading topic or result itself, not the chat session.
-Return only the title text.
-Do not add markdown, labels, or quotation marks.
-Keep it within 30 Chinese characters.
+为一次作业批改结果生成一个简短的中文标题。
+标题应概括批改的题目或核心问题，而不是对话本身。
+只返回标题文本，不加引号、标签或 markdown。
+不超过 15 个汉字。
 `.trim();
 const GENERIC_TITLES = new Set([
     "标题",
@@ -50,7 +47,7 @@ const GENERIC_TITLES = new Set([
 ]);
 
 function createSoloChatAiService(options = {}) {
-    const client = options.client || createChatTitleClient();
+    const client = options.client || createChatClient();
     const attachmentService = options.attachmentService || null;
 
     async function streamAssistantTurn({
@@ -287,6 +284,20 @@ async function buildMessageContent(message, attachmentService) {
             continue;
         }
 
+        if (attachment.kind === "document") {
+            // Binary document (PDF/DOCX/etc.) — sent as a data URL so the
+            // Gemini client can convert it to inline_data. Qianwen will ignore
+            // unrecognised content types and this block is unreachable when
+            // only text/image attachments are used with that provider.
+            content.push({
+                type: "image_url",
+                image_url: {
+                    url: await attachmentService.buildDataUrl(attachment),
+                },
+            });
+            continue;
+        }
+
         content.push({
             type: "image_url",
             image_url: {
@@ -377,6 +388,15 @@ async function buildTitleContextContent(message, attachmentService) {
                     },
                 });
             }
+
+            continue;
+        }
+
+        if (attachment?.kind === "document") {
+            blocks.push({
+                type: "text",
+                text: `文档附件：${fileName}`,
+            });
         }
     }
 

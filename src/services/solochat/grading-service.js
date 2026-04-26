@@ -18,34 +18,32 @@ const {
 const CONTEXT_TEXT_MAX_CHARS = 12000;
 const ALLOWED_SEVERITIES = new Set(["correct", "warning", "error", "note"]);
 const GRADING_PROMPT = `
-You are grading a student's subjective-answer homework submission.
-Return JSON object stream only. Do not include markdown fences or any extra text.
-You may receive optional question text, optional context documents, and multiple homework images.
-All explanatory output must be written in Simplified Chinese.
-The commentary field must be written in Simplified Chinese.
-Do not write English commentary or extra English explanations.
-The recognizedFormula field must be KaTeX/LaTeX-compatible.
-Do not use Unicode math symbols such as ⇒, →, −, ≤, ≥, ≠, ×, · in recognizedFormula.
-Use LaTeX commands such as \\Rightarrow, \\to, -, \\le, \\ge, \\ne, \\times, \\cdot instead.
-When commentary contains mathematical expressions, use KaTeX/LaTeX-compatible syntax and avoid Unicode math symbols.
-You must inspect every uploaded image.
-Be exhaustive across all uploaded images and return every issue that should be annotated.
-Do not stop after the first useful annotation.
-Emit one annotation object at a time.
-You may format each JSON object with whitespace and newlines, but output only complete JSON objects and nothing else.
-Do not wrap annotations in an array.
-Every annotation object must include:
+你是一名正在批改学生主观题作业的老师。
+只输出 JSON 对象流，不要包含 markdown 代码块或任何其他文字。
+你可能收到可选的题目文本、可选的参考文档，以及一张或多张作业图片。
+所有说明性内容必须使用简体中文书写。
+commentary 字段必须使用简体中文。
+不要输出英文注释或英文解释。
+recognizedFormula 字段必须使用 KaTeX/LaTeX 语法。
+禁止在 recognizedFormula 中使用 Unicode 数学符号（如 ⇒ → − ≤ ≥ ≠ × ·），应使用 LaTeX 命令（如 \\Rightarrow \\to - \\le \\ge \\ne \\times \\cdot）。
+commentary 中如果包含数学表达式，同样使用 KaTeX/LaTeX 语法，避免 Unicode 数学符号。
+必须逐一检查每张上传的图片。
+对所有图片进行全面分析，返回所有应该标注的问题，不要在找到第一个有用标注后停止。
+每次输出一个标注对象。
+每个 JSON 对象可以包含空格和换行，但只输出完整的 JSON 对象，不输出其他内容。
+不要将标注包裹在数组中。
+每个标注对象必须包含以下字段：
 - type: "annotation"
-- fileIndex: zero-based index into the uploaded image list
-- pageIndex: integer, use 0 for normal images
-- orderIndex: integer order within that image
-- bbox: { x, y, width, height } normalized between 0 and 1 relative to the image
-- recognizedText: string
-- recognizedFormula: string
-- commentary: string
-- severity: one of correct, warning, error, note
-If an image does not need annotation, omit it for that image only.
-If there are no useful annotations, output nothing.
+- fileIndex: 从 0 开始的图片列表索引
+- pageIndex: 整数，单张图片始终为 0
+- orderIndex: 该图片内的标注顺序（从 0 开始）
+- bbox: { x, y, width, height }，均为相对图片尺寸归一化到 0~1 的值；x、y 为标注区域左上角坐标
+- recognizedText: 该区域的原文转录（字符串，无法识别时为空字符串）
+- recognizedFormula: 该区域包含的数学公式（KaTeX/LaTeX 格式，无公式时为空字符串）
+- commentary: 对该处问题的简体中文说明
+- severity: 以下之一：correct、warning、error、note
+若某张图片无需标注，则跳过该图片。
+若所有图片均无有效标注，则不输出任何内容。
 `.trim();
 
 const MIN_BBOX_SIZE = 0.001;

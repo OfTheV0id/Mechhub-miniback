@@ -29,6 +29,21 @@ const SOLOCHAT_DOCUMENT_EXTENSIONS = new Set([
     "sql",
 ]);
 
+// Binary document formats supported via Gemini inline_data.
+const SOLOCHAT_BINARY_DOCUMENT_EXTENSIONS = new Set([
+    "pdf",
+    "docx",
+    "pptx",
+    "xlsx",
+]);
+
+const SOLOCHAT_BINARY_DOCUMENT_MIME_TYPES = new Set([
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+]);
+
 const SOLOCHAT_IMAGE_EXTENSIONS = new Set([
     "png",
     "jpg",
@@ -87,6 +102,14 @@ function isSoloChatDocumentFileName(fileName) {
     return SOLOCHAT_DOCUMENT_EXTENSIONS.has(normalizeExtension(fileName));
 }
 
+function isSoloChatBinaryDocumentMimeType(mimeType) {
+    return SOLOCHAT_BINARY_DOCUMENT_MIME_TYPES.has(normalizeMimeType(mimeType));
+}
+
+function isSoloChatBinaryDocumentFileName(fileName) {
+    return SOLOCHAT_BINARY_DOCUMENT_EXTENSIONS.has(normalizeExtension(fileName));
+}
+
 function isAllowedSoloChatDocument({ mimeType, fileName }) {
     const normalizedMimeType = normalizeMimeType(mimeType);
 
@@ -104,6 +127,23 @@ function isAllowedSoloChatDocument({ mimeType, fileName }) {
     return isSoloChatDocumentFileName(fileName);
 }
 
+function isAllowedSoloChatBinaryDocument({ mimeType, fileName }) {
+    const normalizedMimeType = normalizeMimeType(mimeType);
+
+    if (isSoloChatBinaryDocumentMimeType(normalizedMimeType)) {
+        return true;
+    }
+
+    if (
+        normalizedMimeType &&
+        normalizedMimeType !== "application/octet-stream"
+    ) {
+        return false;
+    }
+
+    return isSoloChatBinaryDocumentFileName(fileName);
+}
+
 function buildSoloChatAttachmentUrl(attachmentId) {
     return `/solochat/attachments/${attachmentId}`;
 }
@@ -113,12 +153,17 @@ function buildSoloChatPreviewTextUrl(attachmentId) {
 }
 
 module.exports = {
+    SOLOCHAT_BINARY_DOCUMENT_EXTENSIONS,
+    SOLOCHAT_BINARY_DOCUMENT_MIME_TYPES,
     SOLOCHAT_DOCUMENT_EXTENSIONS,
     SOLOCHAT_DOCUMENT_MIME_TYPES,
     SOLOCHAT_DOCUMENT_PREVIEW_MAX_CHARS,
     buildSoloChatAttachmentUrl,
     buildSoloChatPreviewTextUrl,
+    isAllowedSoloChatBinaryDocument,
     isAllowedSoloChatDocument,
+    isSoloChatBinaryDocumentFileName,
+    isSoloChatBinaryDocumentMimeType,
     isSoloChatImageFileName,
     isSoloChatDocumentFileName,
     isSoloChatDocumentMimeType,
