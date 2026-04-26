@@ -122,7 +122,6 @@ async function generateConversationTitle({
             await client.createChatCompletion({
                 messages: await buildTitleMessages(messages, attachmentService),
                 temperature: 0.2,
-                maxTokens: 24,
                 signal,
             }),
         );
@@ -153,7 +152,6 @@ async function generateGradingTitle({
                     attachmentFileName,
                 }),
                 temperature: 0.2,
-                maxTokens: 24,
                 signal,
             }),
         );

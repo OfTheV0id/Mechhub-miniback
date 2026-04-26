@@ -305,7 +305,7 @@ function extractCandidateText(payload) {
     }
 
     return parts
-        .filter((p) => typeof p.text === "string")
+        .filter((p) => typeof p.text === "string" && !p.thought)
         .map((p) => p.text)
         .join("");
 }
