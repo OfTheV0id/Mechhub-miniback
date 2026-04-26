@@ -37,7 +37,7 @@ commentary 中如果包含数学表达式，同样使用 KaTeX/LaTeX 语法，�
 - fileIndex: 从 0 开始的图片列表索引
 - pageIndex: 整数，单张图片始终为 0
 - orderIndex: 该图片内的标注顺序（从 0 开始）
-- bbox: { x, y, width, height }，均为相对图片原始尺寸归一化到 0~1 的浮点数，不是像素值，不是 0~1000 的整数；x、y 为标注区域左上角坐标；bbox 应完整包围目标内容，height 不应小于 0.06；例：图片中央 50% 区域为 { x: 0.25, y: 0.25, width: 0.5, height: 0.5 }
+- sourceText: 该标注区域内图片中实际出现的原始文字，用于精确定位；应尽量精确，优先使用该行/区域中最有特征性的文字或公式片段；无法识别时为空字符串
 - recognizedText: 该区域的原文转录（字符串，无法识别时为空字符串）
 - recognizedFormula: 该区域包含的数学公式（KaTeX/LaTeX 格式，无公式时为空字符串）
 - commentary: 对该处问题的简体中文说明
@@ -45,6 +45,8 @@ commentary 中如果包含数学表达式，同样使用 KaTeX/LaTeX 语法，�
 若某张图片无需标注，则跳过该图片。
 若所有图片均无有效标注，则不输出任何内容。
 `.trim();
+
+const OCR_PROMPT = `Read all the text in the image. Output the results in the format: <ocr>text content</ocr><bbox>x1,y1,x2,y2</bbox> for each text block.`;
 
 const MIN_BBOX_SIZE = 0.001;
 
@@ -85,6 +87,11 @@ function createSoloChatGradingService(options = {}) {
             defaultModel:
                 process.env.OPENAI_GRADING_MODEL ||
                 process.env.OPENAI_MODEL,
+        });
+    const ocrClient =
+        options.ocrClient ||
+        createOpenAiCompatibleClient({
+            defaultModel: "qwen-vl-ocr",
         });
     const titleClient =
         options.titleClient ||
@@ -424,11 +431,9 @@ function createSoloChatGradingService(options = {}) {
                 );
             }
 
+            // Step 1: stream grading analysis (no bbox — sourceText only)
             const annotations = [];
-            let streamIndex = 0;
-            const streamParser = createStreamAnnotationParser(
-                imageAttachments,
-            );
+            const streamParser = createStreamAnnotationParser(imageAttachments);
 
             for await (const delta of gradingClient.streamChatCompletion({
                 messages: await buildGradingMessages({
@@ -441,26 +446,46 @@ function createSoloChatGradingService(options = {}) {
                 maxTokens: 4000,
                 signal: controller.signal,
             })) {
-                const nextAnnotations = streamParser.pushChunk(delta);
-                for (const annotation of nextAnnotations) {
+                for (const annotation of streamParser.pushChunk(delta)) {
                     annotations.push(annotation);
-                    emitTaskAnnotationEvent(
-                        processingTask,
-                        annotation,
-                        streamIndex,
-                    );
-                    streamIndex += 1;
+                }
+            }
+            for (const annotation of streamParser.finish()) {
+                annotations.push(annotation);
+            }
+
+            // Step 2: OCR each image and match sourceText → precise bbox
+            const annotationsByFileIndex = new Map();
+            for (const annotation of annotations) {
+                const idx = annotation.fileIndex;
+                if (!annotationsByFileIndex.has(idx)) {
+                    annotationsByFileIndex.set(idx, []);
+                }
+                annotationsByFileIndex.get(idx).push(annotation);
+            }
+
+            for (const [fileIndex, imageAnnotations] of annotationsByFileIndex) {
+                if (controller.signal.aborted) break;
+                await runOcrMatchingForImage(
+                    ocrClient,
+                    imageAttachments[fileIndex],
+                    imageAnnotations,
+                    fileService,
+                    controller.signal,
+                );
+            }
+
+            // Fallback bbox for any annotation OCR could not locate
+            for (const annotation of annotations) {
+                if (!annotation.bbox) {
+                    annotation.bbox = buildFallbackBbox(annotation.orderIndex);
                 }
             }
 
-            const trailingAnnotations = streamParser.finish();
-            for (const annotation of trailingAnnotations) {
-                annotations.push(annotation);
-                emitTaskAnnotationEvent(
-                    processingTask,
-                    annotation,
-                    streamIndex,
-                );
+            // Emit all annotations with finalized bboxes
+            let streamIndex = 0;
+            for (const annotation of annotations) {
+                emitTaskAnnotationEvent(processingTask, annotation, streamIndex);
                 streamIndex += 1;
             }
 
@@ -988,12 +1013,6 @@ function normalizeAnnotation(annotation, fallbackOrderIndex, imageAttachments) {
         throw badRequest("AI annotation contains an invalid orderIndex");
     }
 
-    const imageAttachment = imageAttachments[fileIndex];
-    const bbox = normalizeBbox(
-        annotation.bbox,
-        imageAttachment.width,
-        imageAttachment.height,
-    );
     const severity = String(annotation.severity || "")
         .trim()
         .toLowerCase();
@@ -1003,10 +1022,12 @@ function normalizeAnnotation(annotation, fallbackOrderIndex, imageAttachments) {
     }
 
     return {
+        fileIndex,
         fileId: imageAttachments[fileIndex].id,
         pageIndex,
         orderIndex,
-        bbox,
+        bbox: null, // filled in by OCR matching
+        sourceText: String(annotation.sourceText || "").trim(),
         recognizedText: String(annotation.recognizedText || "").trim(),
         recognizedFormula: normalizeFormulaText(annotation.recognizedFormula),
         commentary: normalizeCommentaryText(annotation.commentary),
@@ -1014,65 +1035,153 @@ function normalizeAnnotation(annotation, fallbackOrderIndex, imageAttachments) {
     };
 }
 
-function normalizeBbox(bbox, imageWidth, imageHeight) {
-    if (!bbox || typeof bbox !== "object") {
-        throw badRequest("AI annotation bbox is required");
+function clamp(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+}
+
+// ---------------------------------------------------------------------------
+// OCR matching — Step 2 of the two-step grading pipeline
+// ---------------------------------------------------------------------------
+
+const OCR_BBOX_PADDING_X = 0.008;
+const OCR_BBOX_PADDING_Y = 0.012;
+const OCR_BBOX_MIN_HEIGHT = 0.04;
+
+async function runOcrMatchingForImage(
+    ocrClient,
+    imageAttachment,
+    annotations,
+    attachmentService,
+    signal,
+) {
+    const imgW = Number(imageAttachment.width) || 0;
+    const imgH = Number(imageAttachment.height) || 0;
+    if (imgW <= 0 || imgH <= 0) return;
+
+    let responseText;
+    try {
+        const imageDataUrl = await attachmentService.buildDataUrl(imageAttachment);
+        responseText = await ocrClient.createChatCompletion({
+            messages: [{
+                role: "user",
+                content: [
+                    { type: "image_url", image_url: { url: imageDataUrl } },
+                    { type: "text", text: OCR_PROMPT },
+                ],
+            }],
+            temperature: 0,
+            signal,
+        });
+    } catch (_error) {
+        return;
     }
 
-    let x = Number(bbox.x);
-    let y = Number(bbox.y);
-    let width = Number(bbox.width);
-    let height = Number(bbox.height);
+    const ocrBlocks = parseOcrResponse(responseText, imgW, imgH);
+    if (!ocrBlocks.length) return;
 
-    if ([x, y, width, height].some((value) => !Number.isFinite(value))) {
-        throw badRequest("AI annotation bbox must contain numeric values");
+    for (const annotation of annotations) {
+        const query = annotation.sourceText || annotation.recognizedText;
+        if (!query) continue;
+        const match = findBestOcrMatch(query, ocrBlocks);
+        if (match) {
+            annotation.bbox = match;
+        }
     }
+}
 
-    if (width <= 0 || height <= 0) {
-        throw badRequest("AI annotation bbox must have positive width and height");
+// Parse the CSV-per-line OCR response: "x1,y1,h,w,angle,text..."
+// qwen-vl-ocr returns angle=90 for normal horizontal text (h and w are swapped
+// relative to the visual box), and angle=0 for vertically-oriented blocks.
+function parseOcrResponse(text, imgW, imgH) {
+    const blocks = [];
+    for (const line of String(text || "").split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        // Split on first 5 commas only; the rest is the text content
+        const parts = trimmed.split(",");
+        if (parts.length < 6) continue;
+        const x1 = Number(parts[0]);
+        const y1 = Number(parts[1]);
+        const v3 = Number(parts[2]);
+        const v4 = Number(parts[3]);
+        const angle = Number(parts[4]);
+        const blockText = parts.slice(5).join(",").trim();
+        if (!blockText || [x1, y1, v3, v4].some((n) => !Number.isFinite(n))) {
+            continue;
+        }
+        // angle=90: v3=height, v4=width. angle=0: v3=width, v4=height.
+        const w = angle === 90 ? v4 : v3;
+        const h = angle === 90 ? v3 : v4;
+        if (w <= 0 || h <= 0) continue;
+
+        const x = clamp(x1 / imgW, 0, 1 - MIN_BBOX_SIZE);
+        const y = clamp(y1 / imgH, 0, 1 - MIN_BBOX_SIZE);
+        const paddedX = clamp(x - OCR_BBOX_PADDING_X, 0, 1 - MIN_BBOX_SIZE);
+        const paddedY = clamp(y - OCR_BBOX_PADDING_Y, 0, 1 - MIN_BBOX_SIZE);
+        const paddedW = clamp(w / imgW + OCR_BBOX_PADDING_X * 2, MIN_BBOX_SIZE, 1 - paddedX);
+        const paddedH = clamp(
+            Math.max(h / imgH + OCR_BBOX_PADDING_Y * 2, OCR_BBOX_MIN_HEIGHT),
+            MIN_BBOX_SIZE,
+            1 - paddedY,
+        );
+
+        blocks.push({
+            text: blockText,
+            normalizedText: normalizeForOcrMatch(blockText),
+            bbox: { x: paddedX, y: paddedY, width: paddedW, height: paddedH },
+        });
     }
+    return blocks;
+}
 
-    // If any value exceeds 1 the model returned pixel or 0-1000 coordinates.
-    // Normalize using the stored image dimensions when available, otherwise
-    // assume a 0-1000 scale (common for vision models).
-    if (x > 1 || y > 1 || width > 1 || height > 1) {
-        const imgW = Number(imageWidth) || 0;
-        const imgH = Number(imageHeight) || 0;
+function findBestOcrMatch(query, ocrBlocks) {
+    const normalizedQuery = normalizeForOcrMatch(query);
+    if (!normalizedQuery) return null;
 
-        if (imgW > 0 && imgH > 0) {
-            x = x / imgW;
-            y = y / imgH;
-            width = width / imgW;
-            height = height / imgH;
-        } else {
-            x = x / 1000;
-            y = y / 1000;
-            width = width / 1000;
-            height = height / 1000;
+    let bestBbox = null;
+    let bestScore = 0;
+
+    for (const block of ocrBlocks) {
+        const score = textOverlapScore(normalizedQuery, block.normalizedText);
+        if (score > bestScore) {
+            bestScore = score;
+            bestBbox = block.bbox;
         }
     }
 
-    const normalizedX = clamp(x, 0, 1 - MIN_BBOX_SIZE);
-    const normalizedY = clamp(y, 0, 1 - MIN_BBOX_SIZE);
-    const normalizedWidth = Math.min(
-        clamp(width, MIN_BBOX_SIZE, 1),
-        1 - normalizedX,
-    );
-    const normalizedHeight = Math.min(
-        clamp(height, MIN_BBOX_SIZE, 1),
-        1 - normalizedY,
-    );
-
-    return {
-        x: normalizedX,
-        y: normalizedY,
-        width: normalizedWidth,
-        height: normalizedHeight,
-    };
+    // Require at least 30% character overlap to accept the match
+    return bestScore >= 0.3 ? bestBbox : null;
 }
 
-function clamp(value, min, max) {
-    return Math.min(Math.max(value, min), max);
+// Strip LaTeX/markup noise, normalize whitespace for comparison
+function normalizeForOcrMatch(value) {
+    return String(value || "")
+        .replace(/\$|\\\(|\\\)|\\\[|\\\]|\\[a-zA-Z]+\{?/g, " ")
+        .replace(/[{}_^\\]/g, " ")
+        .replace(/\s+/g, "")
+        .toLowerCase();
+}
+
+// Character-level overlap: |intersection| / |union| (Jaccard on char bags)
+function textOverlapScore(a, b) {
+    if (!a || !b) return 0;
+    const shorter = a.length <= b.length ? a : b;
+    const longer = a.length <= b.length ? b : a;
+    let matched = 0;
+    let searchFrom = 0;
+    for (const ch of shorter) {
+        const idx = longer.indexOf(ch, searchFrom);
+        if (idx !== -1) {
+            matched++;
+            searchFrom = idx + 1;
+        }
+    }
+    return matched / Math.max(a.length, b.length);
+}
+
+function buildFallbackBbox(orderIndex) {
+    const y = clamp((Number(orderIndex) || 0) * 0.08, 0, 0.9);
+    return { x: 0.05, y, width: 0.9, height: 0.06 };
 }
 
 function compareAnnotations(left, right) {
