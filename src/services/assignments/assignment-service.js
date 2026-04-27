@@ -152,8 +152,7 @@ function createAssignmentService(db) {
              ) student_counts
                  ON student_counts.class_id = a.class_id
              ${latestSubmissionStatsJoin}
-             WHERE a.class_id = ?
-             ORDER BY a.created_at DESC, a.id DESC`,
+             WHERE a.class_id = ?`,
             classId,
         );
     }
@@ -183,8 +182,7 @@ function createAssignmentService(db) {
                  s.reviewed_at AS latest_reviewed_at
              FROM assignments a
              ${latestSubmissionJoinForAssignments}
-             WHERE a.class_id = ?
-             ORDER BY a.created_at DESC, a.id DESC`,
+             WHERE a.class_id = ?`,
             userId,
             classId,
         );
