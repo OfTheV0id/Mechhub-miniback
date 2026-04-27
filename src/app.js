@@ -16,6 +16,46 @@ const { createUsersRouter } = require("./routes/users");
 const { createFileService } = require("./services/uploads/file-service");
 const { errorHandler } = require("./middleware/error-handler");
 
+function normalizeOriginList(value) {
+    return String(value || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+}
+
+function isSameOriginRequest(req, origin) {
+    try {
+        const parsed = new URL(origin);
+        return (
+            parsed.host === req.get("host") &&
+            parsed.protocol === `${req.protocol}:`
+        );
+    } catch (_error) {
+        return false;
+    }
+}
+
+function createCorsOptions(req, allowedOrigins) {
+    return {
+        origin: (origin, callback) => {
+            // allow requests with no origin (e.g. curl, mobile apps)
+            if (!origin) return callback(null, true);
+            // allow same-origin requests when the app is served through a reverse proxy
+            if (isSameOriginRequest(req, origin)) return callback(null, true);
+            // exact match from env list
+            if (allowedOrigins.includes(origin)) return callback(null, true);
+            // allow any Netlify deploy-preview / branch-deploy / production
+            if (/^https:\/\/[a-z0-9-]+--mechhub\.netlify\.app$/.test(origin))
+                return callback(null, true);
+            callback(new Error(`CORS: origin not allowed - ${origin}`));
+        },
+        credentials: true,
+        methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
+        allowedHeaders: ["Content-Type", "Authorization"],
+        optionsSuccessStatus: 204,
+    };
+}
+
 function createApp(db) {
     const app = express();
     const fileService = createFileService(db);
@@ -23,29 +63,16 @@ function createApp(db) {
     const classEventsHub = createClassEventsHub();
     const assignmentEventsHub = createAssignmentEventsHub();
     const solochatGradingEventsHub = createSoloChatGradingEventsHub();
-    const ALLOWED_ORIGINS = (process.env.CORS_ORIGIN || "http://localhost:5173")
-        .split(",")
-        .map((s) => s.trim());
+    const allowedOrigins = normalizeOriginList(
+        process.env.CORS_ORIGIN || "http://localhost:5173",
+    );
 
-    const corsOptions = {
-        origin: (origin, callback) => {
-            // allow requests with no origin (e.g. curl, mobile apps)
-            if (!origin) return callback(null, true);
-            // exact match from env list
-            if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-            // allow any Netlify deploy-preview / branch-deploy / production
-            if (/^https:\/\/[a-z0-9-]+--mechhub\.netlify\.app$/.test(origin))
-                return callback(null, true);
-            callback(new Error(`CORS: origin not allowed — ${origin}`));
-        },
-        credentials: true,
-        methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
-        allowedHeaders: ["Content-Type", "Authorization"],
-        optionsSuccessStatus: 204,
-    };
-
-    app.use(cors(corsOptions));
-    app.options("*", cors(corsOptions));
+    app.use((req, res, next) => {
+        cors(createCorsOptions(req, allowedOrigins))(req, res, next);
+    });
+    app.options("*", (req, res, next) => {
+        cors(createCorsOptions(req, allowedOrigins))(req, res, next);
+    });
     app.use(express.json());
     app.use(createSessionMiddleware());
 
