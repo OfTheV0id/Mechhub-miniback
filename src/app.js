@@ -63,9 +63,7 @@ function createApp(db) {
     const classEventsHub = createClassEventsHub();
     const assignmentEventsHub = createAssignmentEventsHub();
     const solochatGradingEventsHub = createSoloChatGradingEventsHub();
-    const allowedOrigins = normalizeOriginList(
-        process.env.CORS_ORIGIN || "http://localhost:5173",
-    );
+    const allowedOrigins = normalizeOriginList(process.env.CORS_ORIGIN);
 
     app.use((req, res, next) => {
         cors(createCorsOptions(req, allowedOrigins))(req, res, next);
