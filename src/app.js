@@ -5,11 +5,17 @@ const {
     createAssignmentEventsHub,
 } = require("./lib/assignment-events-hub");
 const {
+    createClassActivityEventsHub,
+} = require("./lib/class-activity-events-hub");
+const {
     createSoloChatGradingEventsHub,
 } = require("./lib/solochat-grading-events-hub");
 const { createSessionMiddleware } = require("./lib/session-store");
 const { createAssignmentsRouter } = require("./routes/assignments");
 const { createAuthRouter } = require("./routes/auth");
+const {
+    createClassActivitiesRouter,
+} = require("./routes/class-activities");
 const { createClassesRouter } = require("./routes/classes");
 const { createSoloChatRouter } = require("./routes/solochat");
 const { createUsersRouter } = require("./routes/users");
@@ -62,6 +68,7 @@ function createApp(db) {
     app.set("trust proxy", 1);
     const classEventsHub = createClassEventsHub();
     const assignmentEventsHub = createAssignmentEventsHub();
+    const activityEventsHub = createClassActivityEventsHub();
     const solochatGradingEventsHub = createSoloChatGradingEventsHub();
     const allowedOrigins = normalizeOriginList(process.env.CORS_ORIGIN);
 
@@ -81,6 +88,7 @@ function createApp(db) {
     app.use("/auth", createAuthRouter(db));
     app.use("/classes", createClassesRouter(db, { classEventsHub }));
     app.use(createAssignmentsRouter(db, { assignmentEventsHub }));
+    app.use(createClassActivitiesRouter(db, { activityEventsHub }));
     app.use(
         "/solochat",
         createSoloChatRouter(db, {

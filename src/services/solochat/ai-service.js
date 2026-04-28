@@ -171,10 +171,10 @@ async function generateGradingTitle({
 }
 
 async function buildReplyMessages(messages, attachmentService) {
-    const replyMessages = [
+        const replyMessages = [
         {
             role: "system",
-            content: SOLOCHAT_SYSTEM_PROMPT,
+            content: buildSystemPrompt(messages),
         },
     ];
 
@@ -186,6 +186,25 @@ async function buildReplyMessages(messages, attachmentService) {
     }
 
     return replyMessages;
+}
+
+function buildSystemPrompt(messages) {
+    const contextPrompt = normalizeWhitespace(
+        messages?.[0]?.conversationContextPrompt || "",
+    );
+
+    if (!contextPrompt) {
+        return SOLOCHAT_SYSTEM_PROMPT;
+    }
+
+    return [
+        SOLOCHAT_SYSTEM_PROMPT,
+        "",
+        "你正在辅助学生完成一个课堂实时任务。必须遵守以下课堂任务上下文：",
+        contextPrompt,
+        "",
+        "默认采用助教式引导：先帮助学生理解题意、拆解思路、检查关键步骤，再协助整理可提交答案。不要直接替学生代写完整答案，除非学生已经给出明确思路并要求整理表达。",
+    ].join("\n");
 }
 
 function buildGradingTitleMessages({

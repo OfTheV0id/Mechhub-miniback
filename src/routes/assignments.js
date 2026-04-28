@@ -379,7 +379,11 @@ function parseJson(value) {
 }
 
 function normalizeAttachmentKind(kind) {
-    return kind === "image" ? "image" : "text";
+    if (kind === "image" || kind === "document") {
+        return kind;
+    }
+
+    return "text";
 }
 
 function buildAssignmentAttachmentUrl(fileId) {
@@ -1430,7 +1434,7 @@ function createAssignmentsRouter(db, { assignmentEventsHub }) {
                     throw notFound("Assignment attachment not found");
                 }
 
-                if (normalizeAttachmentKind(file.kind) !== "text") {
+                if (file.kind !== "text") {
                     throw badRequest("Attachment does not support text preview");
                 }
 

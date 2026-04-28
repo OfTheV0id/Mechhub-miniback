@@ -8,6 +8,12 @@ const { SQLITE_NOW_ISO_EXPRESSION } = require("./time");
 let dbPromise;
 const SQLITE_BUSY_TIMEOUT_MS = 5000;
 const LEGACY_ASSIGNMENT_TABLES = ["submission_files", "submission_reviews"];
+const UPLOADED_FILE_DELETE_TRIGGER_NAMES = [
+    "trg_assignment_files_delete_uploaded_file",
+    "trg_assignment_submission_files_delete_uploaded_file",
+    "trg_class_activity_files_delete_uploaded_file",
+    "trg_class_activity_submission_files_delete_uploaded_file",
+];
 
 function resolveDbPath() {
     const configuredPath = process.env.DB_PATH || "./data/app.sqlite";
@@ -61,6 +67,7 @@ async function prepareDb(db) {
     await migrateLegacyAssignmentAndUploadTables(db);
     await ensureUploadTables(db);
     await ensureAssignmentTables(db);
+    await ensureClassActivityTables(db);
 }
 
 async function withImmediateTransaction(work) {
@@ -309,6 +316,28 @@ async function ensureSoloChatTables(db) {
         ON solochat_grading_tasks(message_id)
         WHERE message_id IS NOT NULL
     `);
+
+    const conversationColumns = await db.all(
+        `PRAGMA table_info(solochat_conversations)`,
+    );
+    const conversationColumnNames = new Set(
+        conversationColumns.map((column) => column.name),
+    );
+    if (!conversationColumnNames.has("context_type")) {
+        await db.exec(
+            `ALTER TABLE solochat_conversations ADD COLUMN context_type TEXT NOT NULL DEFAULT ''`,
+        );
+    }
+    if (!conversationColumnNames.has("context_ref_id")) {
+        await db.exec(
+            `ALTER TABLE solochat_conversations ADD COLUMN context_ref_id INTEGER DEFAULT NULL`,
+        );
+    }
+    if (!conversationColumnNames.has("context_prompt")) {
+        await db.exec(
+            `ALTER TABLE solochat_conversations ADD COLUMN context_prompt TEXT NOT NULL DEFAULT ''`,
+        );
+    }
 }
 
 async function ensureClassTables(db) {
@@ -500,6 +529,9 @@ async function rebuildUploadTables(
 
 async function ensureUploadTables(db) {
     await createUploadedFilesTable(db);
+    if (await uploadedFilesTableNeedsDocumentKindRebuild(db)) {
+        await rebuildUploadedFilesTableForDocumentKind(db);
+    }
     await createSoloChatMessageFilesTable(db);
 
     await db.exec(`
@@ -690,6 +722,169 @@ async function ensureAssignmentTables(db) {
     );
 }
 
+async function ensureClassActivityTables(db) {
+    await db.exec(`
+        CREATE TABLE IF NOT EXISTS class_activities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            class_id INTEGER NOT NULL,
+            creator_user_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            prompt_text TEXT NOT NULL DEFAULT '',
+            ai_guidance TEXT NOT NULL DEFAULT 'guided' CHECK (ai_guidance IN ('guided', 'direct')),
+            status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'active', 'discussion', 'ended')),
+            due_at TEXT DEFAULT NULL,
+            summary_status TEXT NOT NULL DEFAULT 'idle' CHECK (summary_status IN ('idle', 'generating', 'completed', 'failed')),
+            summary_markdown TEXT NOT NULL DEFAULT '',
+            summary_error_message TEXT DEFAULT NULL,
+            created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
+            updated_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
+            FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE CASCADE,
+            FOREIGN KEY (creator_user_id) REFERENCES users(id)
+        );
+    `);
+
+    await db.exec(`
+        CREATE TABLE IF NOT EXISTS class_activity_files (
+            activity_id INTEGER NOT NULL,
+            file_id INTEGER NOT NULL UNIQUE,
+            PRIMARY KEY (activity_id, file_id),
+            FOREIGN KEY (activity_id) REFERENCES class_activities(id) ON DELETE CASCADE,
+            FOREIGN KEY (file_id) REFERENCES uploaded_files(id) ON DELETE CASCADE
+        );
+    `);
+
+    await db.exec(`
+        CREATE TABLE IF NOT EXISTS class_activity_workspaces (
+            activity_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            conversation_id INTEGER NOT NULL UNIQUE,
+            started_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
+            updated_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
+            PRIMARY KEY (activity_id, user_id),
+            FOREIGN KEY (activity_id) REFERENCES class_activities(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (conversation_id) REFERENCES solochat_conversations(id) ON DELETE CASCADE
+        );
+    `);
+
+    await db.exec(`
+        CREATE TABLE IF NOT EXISTS class_activity_submissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            activity_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            answer_text TEXT NOT NULL DEFAULT '',
+            source_conversation_id INTEGER DEFAULT NULL,
+            solochat_snapshot_json TEXT NOT NULL DEFAULT '',
+            submission_version INTEGER NOT NULL DEFAULT 1,
+            submitted_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
+            created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
+            updated_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
+            FOREIGN KEY (activity_id) REFERENCES class_activities(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (source_conversation_id) REFERENCES solochat_conversations(id) ON DELETE SET NULL
+        );
+    `);
+
+    await db.exec(`
+        CREATE TABLE IF NOT EXISTS class_activity_submission_files (
+            submission_id INTEGER NOT NULL,
+            file_id INTEGER NOT NULL UNIQUE,
+            PRIMARY KEY (submission_id, file_id),
+            FOREIGN KEY (submission_id) REFERENCES class_activity_submissions(id) ON DELETE CASCADE,
+            FOREIGN KEY (file_id) REFERENCES uploaded_files(id) ON DELETE CASCADE
+        );
+    `);
+
+    await db.exec(`
+        CREATE TABLE IF NOT EXISTS class_activity_showcases (
+            activity_id INTEGER NOT NULL,
+            submission_id INTEGER NOT NULL,
+            created_by_user_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
+            PRIMARY KEY (activity_id, submission_id),
+            FOREIGN KEY (activity_id) REFERENCES class_activities(id) ON DELETE CASCADE,
+            FOREIGN KEY (submission_id) REFERENCES class_activity_submissions(id) ON DELETE CASCADE,
+            FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+        );
+    `);
+
+    await db.exec(`
+        CREATE TABLE IF NOT EXISTS class_activity_showcase_comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            activity_id INTEGER NOT NULL,
+            submission_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
+            FOREIGN KEY (activity_id) REFERENCES class_activities(id) ON DELETE CASCADE,
+            FOREIGN KEY (submission_id) REFERENCES class_activity_submissions(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+    `);
+
+    await db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_class_activity_showcase_comments_submission
+        ON class_activity_showcase_comments(submission_id, created_at ASC, id ASC)
+    `);
+
+    const activityColumns = await getTableColumns(db, "class_activities");
+    const activityColumnNames = new Set(activityColumns.map((c) => c.name));
+    if (!activityColumnNames.has("focused_submission_id")) {
+        await db.exec(
+            `ALTER TABLE class_activities ADD COLUMN focused_submission_id INTEGER DEFAULT NULL REFERENCES class_activity_submissions(id) ON DELETE SET NULL`,
+        );
+    }
+
+    const submissionColumns = await getTableColumns(
+        db,
+        "class_activity_submissions",
+    );
+    const submissionColumnNames = new Set(
+        submissionColumns.map((c) => c.name),
+    );
+    if (!submissionColumnNames.has("is_anonymous")) {
+        await db.exec(
+            `ALTER TABLE class_activity_submissions ADD COLUMN is_anonymous INTEGER NOT NULL DEFAULT 0`,
+        );
+    }
+
+    await db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_class_activities_class_created
+        ON class_activities(class_id, created_at DESC, id DESC)
+    `);
+
+    await db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_class_activity_submissions_activity
+        ON class_activity_submissions(activity_id, submitted_at DESC, id DESC)
+    `);
+
+    await db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_class_activity_submissions_user
+        ON class_activity_submissions(user_id, activity_id, submission_version DESC)
+    `);
+
+    await db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_class_activity_submissions_version
+        ON class_activity_submissions(activity_id, user_id, submission_version)
+    `);
+
+    await db.exec(`
+        CREATE TRIGGER IF NOT EXISTS trg_class_activity_files_delete_uploaded_file
+        AFTER DELETE ON class_activity_files
+        BEGIN
+            DELETE FROM uploaded_files WHERE id = OLD.file_id;
+        END;
+    `);
+
+    await db.exec(`
+        CREATE TRIGGER IF NOT EXISTS trg_class_activity_submission_files_delete_uploaded_file
+        AFTER DELETE ON class_activity_submission_files
+        BEGIN
+            DELETE FROM uploaded_files WHERE id = OLD.file_id;
+        END;
+    `);
+}
+
 async function assignmentSubmissionsNeedHistoryRebuild(db) {
     if (!(await tableExists(db, "assignment_submissions"))) {
         return false;
@@ -857,9 +1052,9 @@ async function rebuildAssignmentSubmissionTablesForHistory(db) {
     }
 }
 
-async function createUploadedFilesTable(db) {
+async function createUploadedFilesTable(db, tableName = "uploaded_files") {
     await db.exec(`
-        CREATE TABLE IF NOT EXISTS uploaded_files (
+        CREATE TABLE IF NOT EXISTS ${tableName} (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             owner_user_id INTEGER NOT NULL,
             storage_path TEXT NOT NULL,
@@ -868,11 +1063,82 @@ async function createUploadedFilesTable(db) {
             size_bytes INTEGER NOT NULL,
             width INTEGER DEFAULT NULL,
             height INTEGER DEFAULT NULL,
-            kind TEXT NOT NULL CHECK (kind IN ('image', 'text')),
+            kind TEXT NOT NULL CHECK (kind IN ('image', 'text', 'document')),
             created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
             FOREIGN KEY (owner_user_id) REFERENCES users(id)
         );
     `);
+}
+
+async function uploadedFilesTableNeedsDocumentKindRebuild(db) {
+    const row = await db.get(
+        `SELECT sql
+         FROM sqlite_master
+         WHERE type = 'table' AND name = 'uploaded_files'`,
+    );
+    const tableSql = String(row?.sql || "").toLowerCase();
+
+    return Boolean(tableSql) && !tableSql.includes("'document'");
+}
+
+async function rebuildUploadedFilesTableForDocumentKind(db) {
+    const files = await db.all(
+        `SELECT id, owner_user_id, storage_path, file_name, mime_type, size_bytes, width, height, kind, created_at
+         FROM uploaded_files
+         ORDER BY id ASC`,
+    );
+
+    await db.exec("PRAGMA foreign_keys = OFF");
+    await db.exec("BEGIN");
+
+    try {
+        await dropUploadedFileDeleteTriggers(db);
+        await db.exec("DROP TABLE IF EXISTS uploaded_files_new");
+        await createUploadedFilesTable(db, "uploaded_files_new");
+
+        for (const file of files) {
+            await db.run(
+                `INSERT INTO uploaded_files_new (
+                     id,
+                     owner_user_id,
+                     storage_path,
+                     file_name,
+                     mime_type,
+                     size_bytes,
+                     width,
+                     height,
+                     kind,
+                     created_at
+                 )
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                file.id,
+                file.owner_user_id,
+                file.storage_path,
+                file.file_name,
+                file.mime_type,
+                file.size_bytes,
+                file.width ?? null,
+                file.height ?? null,
+                normalizeUploadedFileKind(file.kind),
+                file.created_at || new Date().toISOString(),
+            );
+        }
+
+        await db.exec("DROP TABLE uploaded_files");
+        await db.exec("ALTER TABLE uploaded_files_new RENAME TO uploaded_files");
+        await db.exec("COMMIT");
+    } catch (error) {
+        await db.exec("ROLLBACK").catch(() => {});
+        throw error;
+    } finally {
+        await db.exec("PRAGMA foreign_keys = ON");
+    }
+}
+
+async function dropUploadedFileDeleteTriggers(db) {
+    for (const triggerName of UPLOADED_FILE_DELETE_TRIGGER_NAMES) {
+        await db.exec(`DROP TRIGGER IF EXISTS ${triggerName}`);
+    }
 }
 
 async function createSoloChatMessageFilesTable(db) {
@@ -994,7 +1260,11 @@ async function dropTables(db, tableNames) {
 }
 
 function normalizeUploadedFileKind(kind) {
-    return kind === "image" ? "image" : "text";
+    if (kind === "image" || kind === "document") {
+        return kind;
+    }
+
+    return "text";
 }
 
 async function deleteStoredFilesBestEffort(files) {

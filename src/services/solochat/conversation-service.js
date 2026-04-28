@@ -5,25 +5,52 @@ function createSoloChatConversationService(db) {
 
     async function listConversationsForUser(userId) {
         return db.all(
-            `SELECT id, user_id, title, created_at, updated_at
-             FROM solochat_conversations
-             WHERE user_id = ?
-             ORDER BY updated_at DESC, id DESC`,
+            `SELECT
+                 c.id,
+                 c.user_id,
+                 c.title,
+                 c.context_type,
+                 c.context_ref_id,
+                 c.context_prompt,
+                 c.created_at,
+                 c.updated_at,
+                 a.class_id AS linked_activity_class_id,
+                 a.title AS linked_activity_title,
+                 a.status AS linked_activity_status
+             FROM solochat_conversations c
+             LEFT JOIN class_activity_workspaces w
+                 ON w.conversation_id = c.id
+             LEFT JOIN class_activities a
+                 ON a.id = w.activity_id
+             WHERE c.user_id = ?
+             ORDER BY c.updated_at DESC, c.id DESC`,
             userId,
         );
     }
 
-    async function createConversation({ userId, title = "New Chat" }) {
+    async function createConversation({
+        userId,
+        title = "New Chat",
+        contextType = "",
+        contextRefId = null,
+        contextPrompt = "",
+    }) {
         const result = await db.run(
             `INSERT INTO solochat_conversations (
                  user_id,
                  title,
+                 context_type,
+                 context_ref_id,
+                 context_prompt,
                  created_at,
                  updated_at
-             )
-             VALUES (?, ?, ${nowExpression}, ${nowExpression})`,
+              )
+              VALUES (?, ?, ?, ?, ?, ${nowExpression}, ${nowExpression})`,
             userId,
             title,
+            contextType,
+            contextRefId,
+            contextPrompt,
         );
 
         return getConversationById(result.lastID);
@@ -31,7 +58,7 @@ function createSoloChatConversationService(db) {
 
     async function getConversationById(conversationId) {
         return db.get(
-            `SELECT id, user_id, title, created_at, updated_at
+            `SELECT id, user_id, title, context_type, context_ref_id, context_prompt, created_at, updated_at
              FROM solochat_conversations
              WHERE id = ?`,
             conversationId,
@@ -40,7 +67,7 @@ function createSoloChatConversationService(db) {
 
     async function getConversationForUser({ conversationId, userId }) {
         return db.get(
-            `SELECT id, user_id, title, created_at, updated_at
+            `SELECT id, user_id, title, context_type, context_ref_id, context_prompt, created_at, updated_at
              FROM solochat_conversations
              WHERE id = ? AND user_id = ?`,
             conversationId,

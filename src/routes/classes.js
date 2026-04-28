@@ -1,6 +1,9 @@
 const express = require("express");
 const multer = require("multer");
 const { createClassService } = require("../services/classes/class-service");
+const {
+    createClassActivityService,
+} = require("../services/classes/class-activity-service");
 const { createFileService } = require("../services/uploads/file-service");
 const {
     USER_ROLES,
@@ -260,6 +263,7 @@ function attachCurrentUserId(classRecord, userId) {
 function createClassesRouter(db, { classEventsHub }) {
     const router = express.Router();
     const classService = createClassService(db);
+    const activityService = createClassActivityService(db);
 
     async function emitClassInvalidation({
         classId,
@@ -419,9 +423,25 @@ function createClassesRouter(db, { classEventsHub }) {
                 throw notFound("Class not found");
             }
 
-            return res.json(
-                sanitizeClassDetailRecord(attachCurrentUserId(classRecord, userId)),
+            const sanitized = sanitizeClassDetailRecord(
+                attachCurrentUserId(classRecord, userId),
             );
+            const activeActivity =
+                await activityService.getActiveActivityForClass(classId);
+            return res.json({
+                ...sanitized,
+                activeActivity: activeActivity
+                    ? {
+                          id: String(activeActivity.id),
+                          title: activeActivity.title,
+                          status: activeActivity.status,
+                          dueAt: activeActivity.due_at
+                              ? toIsoTimestamp(activeActivity.due_at)
+                              : null,
+                          createdAt: toIsoTimestamp(activeActivity.created_at),
+                      }
+                    : null,
+            });
         } catch (error) {
             return next(error);
         }

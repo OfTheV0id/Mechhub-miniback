@@ -173,7 +173,7 @@ function createFileService(db, options = {}) {
     async function processAssignmentSubmissionUpload({ userId, file }) {
         validateUploadedFile(file);
 
-        // Accepts images and approved text/code documents only (same as solochat)
+        // Accepts images and approved text/code or binary documents (same as solochat).
         const normalizedFile = await normalizeSoloChatUpload(file);
         const safeFileName = sanitizeFileName(file.originalname || "upload.bin");
         const storedFileName =

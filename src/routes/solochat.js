@@ -241,15 +241,33 @@ function parseSoloChatUpload(req, res) {
 }
 
 function sanitizeConversation(conversation) {
+    const linkedActivityRefId =
+        conversation.context_type === "class_activity"
+            ? conversation.context_ref_id
+            : null;
     return {
         id: serializeId(conversation.id),
         title: conversation.title,
         updatedAt: toIsoTimestamp(conversation.updated_at),
+        linkedActivity: linkedActivityRefId
+            ? {
+                  id: serializeId(linkedActivityRefId),
+                  classId: conversation.linked_activity_class_id
+                      ? serializeId(conversation.linked_activity_class_id)
+                      : null,
+                  title: conversation.linked_activity_title || null,
+                  status: conversation.linked_activity_status || null,
+              }
+            : null,
     };
 }
 
 function normalizeAttachmentKind(kind) {
-    return kind === "image" ? "image" : "text";
+    if (kind === "image" || kind === "document") {
+        return kind;
+    }
+
+    return "text";
 }
 
 function sanitizeAttachment(attachment) {
@@ -458,7 +476,7 @@ function createSoloChatRouter(db, options = {}) {
                     throw notFound("Attachment not found");
                 }
 
-                if (normalizeAttachmentKind(attachment.kind) !== "text") {
+                if (attachment.kind !== "text") {
                     throw badRequest("Attachment does not support text preview");
                 }
 
@@ -770,6 +788,10 @@ function createSoloChatRouter(db, options = {}) {
 
                 const history =
                     await conversationService.listMessages(conversationId);
+                const contextualHistory = history.map((message) => ({
+                    ...message,
+                    conversationContextPrompt: conversation.context_prompt || "",
+                }));
                 assistantMessage = await conversationService.createMessage({
                     conversationId,
                     role: "assistant",
@@ -800,7 +822,7 @@ function createSoloChatRouter(db, options = {}) {
                 const { assistantContent, nextTitle } =
                     await aiService.streamAssistantTurn({
                         conversation,
-                        messages: history,
+                        messages: contextualHistory,
                         signal: streamAbortController.signal,
                         onDelta(delta) {
                             assistantContentBuffer += delta;
