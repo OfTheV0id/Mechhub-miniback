@@ -19,6 +19,9 @@ const {
 const {
     normalizeRenderableMessageContent,
 } = require("../services/solochat/math-normalizer");
+const {
+    buildSoloChatSnapshotAttachmentUrl,
+} = require("../services/solochat/attachment-contract");
 
 const MAX_ACTIVITY_ATTACHMENTS = 10;
 const MAX_SUBMISSION_ATTACHMENTS = 10;
@@ -246,8 +249,10 @@ function sanitizeActivityDetail({
     files,
     workspace = null,
     latestSubmission = null,
+    latestSubmissionFiles = [],
     showcasedSubmissions = [],
     showcaseCommentsBySubmissionId = {},
+    showcaseFilesBySubmissionId = {},
     viewerUserId = null,
 }) {
     const creator = sanitizeUser({
@@ -273,10 +278,24 @@ function sanitizeActivityDetail({
               }
             : null,
         latestSubmission: latestSubmission
-            ? sanitizeSubmission(latestSubmission, { includeSnapshot: true })
+            ? sanitizeSubmission(latestSubmission, {
+                  files: latestSubmissionFiles,
+                  includeSnapshot: true,
+              })
             : null,
         showcasedSubmissions: showcasedSubmissions.map((submission) => {
+            const submissionId = serializeId(submission.id);
+            const isRedacted =
+                role === USER_ROLES.STUDENT &&
+                submission.is_anonymous &&
+                serializeId(submission.user_id) !==
+                    serializeId(viewerUserId);
             const sanitized = sanitizeSubmission(submission, {
+                // Hide attachments for anonymous showcased submissions when
+                // the viewer is not the author (URLs would leak ownership).
+                files: isRedacted
+                    ? []
+                    : showcaseFilesBySubmissionId[submissionId] || [],
                 includeSnapshot: false,
                 redactAnonymous:
                     role === USER_ROLES.STUDENT &&
@@ -284,7 +303,7 @@ function sanitizeActivityDetail({
                         serializeId(viewerUserId),
             });
             const comments = (
-                showcaseCommentsBySubmissionId[serializeId(submission.id)] || []
+                showcaseCommentsBySubmissionId[submissionId] || []
             ).map(sanitizeShowcaseComment);
             return { ...sanitized, comments };
         }),
@@ -454,6 +473,9 @@ async function buildSoloChatSnapshot({
                 sizeBytes: attachment.size_bytes,
                 width: attachment.width ?? null,
                 height: attachment.height ?? null,
+                url: buildSoloChatSnapshotAttachmentUrl(
+                    serializeId(attachment.id),
+                ),
             };
             if (snapshotAttachment.kind === "text") {
                 const preview = await fileService.readTextPreview(attachment, {
@@ -712,6 +734,7 @@ function createClassActivitiesRouter(db, { activityEventsHub }) {
             const showcasedSubmissions =
                 await activityService.listShowcasedSubmissions(activityId);
             const showcaseCommentsBySubmissionId = {};
+            const showcaseFilesBySubmissionId = {};
             for (const showcased of showcasedSubmissions) {
                 const submissionId = serializeId(showcased.id);
                 showcaseCommentsBySubmissionId[submissionId] =
@@ -719,7 +742,12 @@ function createClassActivitiesRouter(db, { activityEventsHub }) {
                         activityId,
                         submissionId: showcased.id,
                     });
+                showcaseFilesBySubmissionId[submissionId] =
+                    await activityService.listSubmissionFiles(showcased.id);
             }
+            const latestSubmissionFiles = latestSubmission
+                ? await activityService.listSubmissionFiles(latestSubmission.id)
+                : [];
             return res.json(
                 sanitizeActivityDetail({
                     activity,
@@ -727,8 +755,10 @@ function createClassActivitiesRouter(db, { activityEventsHub }) {
                     files,
                     workspace,
                     latestSubmission,
+                    latestSubmissionFiles,
                     showcasedSubmissions,
                     showcaseCommentsBySubmissionId,
+                    showcaseFilesBySubmissionId,
                     viewerUserId: userId,
                 }),
             );
@@ -952,7 +982,14 @@ function createClassActivitiesRouter(db, { activityEventsHub }) {
                 throw forbidden("Only teachers can list activity submissions");
             }
             const submissions = await activityService.listSubmissions(activityId);
-            return res.json(submissions.map((s) => sanitizeSubmission(s)));
+            const sanitizedList = [];
+            for (const submission of submissions) {
+                const files = await activityService.listSubmissionFiles(
+                    submission.id,
+                );
+                sanitizedList.push(sanitizeSubmission(submission, { files }));
+            }
+            return res.json(sanitizedList);
         } catch (error) {
             return next(error);
         }

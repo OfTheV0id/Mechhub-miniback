@@ -1,4 +1,6 @@
-const { createOpenAiCompatibleClient } = require("../solochat/openai-client");
+const {
+    createAssignmentEvaluationClient,
+} = require("../solochat/ai-client-factory");
 
 const REFERENCE_TEXT_MAX_CHARS = 8_000;
 const ANSWER_TEXT_MAX_CHARS = 16_000;
@@ -38,12 +40,7 @@ function upstreamError(message) {
 
 function createAssignmentEvaluator(options = {}) {
     const fileService = options.fileService;
-    const client =
-        options.client ||
-        createOpenAiCompatibleClient({
-            defaultModel:
-                process.env.OPENAI_GRADING_MODEL || process.env.OPENAI_MODEL,
-        });
+    const client = options.client || createAssignmentEvaluationClient();
 
     async function evaluateSubmissionStream({
         assignment,

@@ -281,6 +281,85 @@ function createFileService(db, options = {}) {
         );
     }
 
+    async function getSoloChatSnapshotFile({ fileId, userId }) {
+        return db.get(
+            `SELECT uf.id, uf.owner_user_id, uf.storage_path, uf.file_name, uf.mime_type, uf.size_bytes, uf.width, uf.height, uf.kind, uf.created_at
+             FROM uploaded_files uf
+             WHERE uf.id = ?
+               AND (
+                    -- Conversation owner (e.g. student viewing their own past snapshot)
+                    EXISTS (
+                        SELECT 1
+                        FROM solochat_message_files smf
+                        INNER JOIN solochat_messages sm ON sm.id = smf.message_id
+                        INNER JOIN solochat_conversations sc ON sc.id = sm.conversation_id
+                        WHERE smf.file_id = uf.id AND sc.user_id = ?
+                    )
+                    -- Grading task owner (annotated images & references)
+                    OR EXISTS (
+                        SELECT 1
+                        FROM solochat_grading_task_files sgtf
+                        INNER JOIN solochat_grading_tasks sgt ON sgt.id = sgtf.task_id
+                        WHERE sgtf.file_id = uf.id AND sgt.user_id = ?
+                    )
+                    -- Teacher in the class hosting the class-activity workspace conversation
+                    OR EXISTS (
+                        SELECT 1
+                        FROM solochat_message_files smf
+                        INNER JOIN solochat_messages sm ON sm.id = smf.message_id
+                        INNER JOIN class_activity_workspaces caw ON caw.conversation_id = sm.conversation_id
+                        INNER JOIN class_activities ca ON ca.id = caw.activity_id
+                        INNER JOIN class_members cm
+                            ON cm.class_id = ca.class_id AND cm.user_id = ?
+                        WHERE smf.file_id = uf.id AND cm.role = 'teacher'
+                    )
+                    -- Teacher accessing a grading task attached to a class-activity workspace
+                    OR EXISTS (
+                        SELECT 1
+                        FROM solochat_grading_task_files sgtf
+                        INNER JOIN solochat_grading_tasks sgt ON sgt.id = sgtf.task_id
+                        INNER JOIN class_activity_workspaces caw ON caw.conversation_id = sgt.conversation_id
+                        INNER JOIN class_activities ca ON ca.id = caw.activity_id
+                        INNER JOIN class_members cm
+                            ON cm.class_id = ca.class_id AND cm.user_id = ?
+                        WHERE sgtf.file_id = uf.id AND cm.role = 'teacher'
+                    )
+                    -- Teacher in the class hosting an assignment whose submission references the conversation
+                    OR EXISTS (
+                        SELECT 1
+                        FROM solochat_message_files smf
+                        INNER JOIN solochat_messages sm ON sm.id = smf.message_id
+                        INNER JOIN assignment_submissions asub
+                            ON asub.source_conversation_id = sm.conversation_id
+                        INNER JOIN assignments a ON a.id = asub.assignment_id
+                        INNER JOIN class_members cm
+                            ON cm.class_id = a.class_id AND cm.user_id = ?
+                        WHERE smf.file_id = uf.id AND cm.role = 'teacher'
+                    )
+                    -- Teacher accessing a grading task attached to an assignment submission's source conversation
+                    OR EXISTS (
+                        SELECT 1
+                        FROM solochat_grading_task_files sgtf
+                        INNER JOIN solochat_grading_tasks sgt ON sgt.id = sgtf.task_id
+                        INNER JOIN assignment_submissions asub
+                            ON asub.source_conversation_id = sgt.conversation_id
+                        INNER JOIN assignments a ON a.id = asub.assignment_id
+                        INNER JOIN class_members cm
+                            ON cm.class_id = a.class_id AND cm.user_id = ?
+                        WHERE sgtf.file_id = uf.id AND cm.role = 'teacher'
+                    )
+               )
+             LIMIT 1`,
+            fileId,
+            userId,
+            userId,
+            userId,
+            userId,
+            userId,
+            userId,
+        );
+    }
+
     async function listFilesByIds(fileIds) {
         const normalizedIds = normalizeIds(fileIds);
 
@@ -430,6 +509,7 @@ function createFileService(db, options = {}) {
         buildDataUrl,
         getFileById,
         getSoloChatFileForUser,
+        getSoloChatSnapshotFile,
         listFilesForConversation,
         listFilesForSoloChatMessage,
         processAssignmentFileUpload,

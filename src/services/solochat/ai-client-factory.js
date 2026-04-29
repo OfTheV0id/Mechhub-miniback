@@ -41,8 +41,29 @@ function createGradingClient(options = {}) {
     });
 }
 
+function createAssignmentEvaluationClient(options = {}) {
+    if (isGeminiEnabled()) {
+        return createGeminiClient({
+            defaultModel:
+                options.defaultModel ??
+                process.env.GEMINI_ASSIGNMENT_EVALUATION_MODEL ??
+                process.env.GEMINI_CHAT_MODEL ??
+                process.env.GEMINI_MODEL,
+        });
+    }
+
+    return createOpenAiCompatibleClient({
+        defaultModel:
+            options.defaultModel ??
+            process.env.OPENAI_ASSIGNMENT_EVALUATION_MODEL ??
+            process.env.OPENAI_CHAT_MODEL ??
+            process.env.OPENAI_MODEL,
+    });
+}
+
 module.exports = {
     isGeminiEnabled,
     createChatClient,
     createGradingClient,
+    createAssignmentEvaluationClient,
 };

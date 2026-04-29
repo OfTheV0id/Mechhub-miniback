@@ -438,14 +438,20 @@ function createSoloChatRouter(db, options = {}) {
         }
     });
 
+    async function resolveAccessibleAttachment(fileId, userId) {
+        const owned = await fileService.getSoloChatFileForUser({ fileId, userId });
+        if (owned) return owned;
+        return fileService.getSoloChatSnapshotFile({ fileId, userId });
+    }
+
     router.get("/attachments/:attachmentId", async (req, res, next) => {
         try {
             const userId = requireUserId(req);
             const attachmentId = parseAttachmentId(req.params.attachmentId);
-            const attachment = await fileService.getSoloChatFileForUser({
-                fileId: attachmentId,
+            const attachment = await resolveAccessibleAttachment(
+                attachmentId,
                 userId,
-            });
+            );
 
             if (!attachment) {
                 throw notFound("Attachment not found");
@@ -467,7 +473,64 @@ function createSoloChatRouter(db, options = {}) {
             try {
                 const userId = requireUserId(req);
                 const attachmentId = parseAttachmentId(req.params.attachmentId);
-                const attachment = await fileService.getSoloChatFileForUser({
+                const attachment = await resolveAccessibleAttachment(
+                    attachmentId,
+                    userId,
+                );
+
+                if (!attachment) {
+                    throw notFound("Attachment not found");
+                }
+
+                if (attachment.kind !== "text") {
+                    throw badRequest("Attachment does not support text preview");
+                }
+
+                const preview = await fileService.readTextPreview(attachment);
+                return res.json(
+                    sanitizeTextPreviewResponse(attachment, preview),
+                );
+            } catch (error) {
+                return next(error);
+            }
+        },
+    );
+
+    router.get(
+        "/snapshot-attachments/:attachmentId",
+        async (req, res, next) => {
+            try {
+                const userId = requireUserId(req);
+                const attachmentId = parseAttachmentId(req.params.attachmentId);
+                const attachment = await fileService.getSoloChatSnapshotFile({
+                    fileId: attachmentId,
+                    userId,
+                });
+
+                if (!attachment) {
+                    throw notFound("Attachment not found");
+                }
+
+                res.setHeader(
+                    "Content-Disposition",
+                    buildInlineContentDisposition(attachment.file_name),
+                );
+                return res
+                    .type(attachment.mime_type)
+                    .sendFile(attachment.storage_path);
+            } catch (error) {
+                return next(error);
+            }
+        },
+    );
+
+    router.get(
+        "/snapshot-attachments/:attachmentId/preview-text",
+        async (req, res, next) => {
+            try {
+                const userId = requireUserId(req);
+                const attachmentId = parseAttachmentId(req.params.attachmentId);
+                const attachment = await fileService.getSoloChatSnapshotFile({
                     fileId: attachmentId,
                     userId,
                 });
@@ -477,7 +540,9 @@ function createSoloChatRouter(db, options = {}) {
                 }
 
                 if (attachment.kind !== "text") {
-                    throw badRequest("Attachment does not support text preview");
+                    throw badRequest(
+                        "Attachment does not support text preview",
+                    );
                 }
 
                 const preview = await fileService.readTextPreview(attachment);
@@ -637,7 +702,7 @@ function createSoloChatRouter(db, options = {}) {
         try {
             const userId = requireUserId(req);
             const taskId = parseGradingTaskId(req.params.taskId);
-            const task = await gradingService.getTaskDetailForUser({
+            const task = await gradingService.getTaskDetailForViewer({
                 taskId,
                 userId,
             });

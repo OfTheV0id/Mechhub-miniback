@@ -21,6 +21,9 @@ const {
 const {
     normalizeRenderableMessageContent,
 } = require("../services/solochat/math-normalizer");
+const {
+    buildSoloChatSnapshotAttachmentUrl,
+} = require("../services/solochat/attachment-contract");
 
 const MAX_ASSIGNMENT_REFERENCE_ATTACHMENTS = 10;
 const MAX_ASSIGNMENT_SUBMISSION_ATTACHMENTS = 10;
@@ -630,6 +633,22 @@ function sanitizeStudentSubmissionSummary(submission) {
                 : submission.latest_reviewed_at,
     });
 
+    const reviewerUserId = hasExplicitSummaryId
+        ? submission.latest_reviewer_user_id
+        : submission.reviewer_user_id;
+    const reviewedAtRaw = hasExplicitSummaryId
+        ? submission.latest_reviewed_at
+        : submission.reviewed_at;
+    const isTeacherOverridden = hasExplicitSummaryId
+        ? submission.latest_is_teacher_overridden
+        : submission.is_teacher_overridden;
+    const teacherReviewed = Boolean(
+        isTeacherOverridden || reviewerUserId || reviewedAtRaw,
+    );
+    const aiReviewedAtRaw = hasExplicitSummaryId
+        ? submission.latest_ai_reviewed_at
+        : submission.ai_reviewed_at;
+
     return {
         id: serializeId(submissionId),
         submissionVersion: Number(
@@ -651,6 +670,9 @@ function sanitizeStudentSubmissionSummary(submission) {
             (hasExplicitSummaryId
                 ? submission.latest_evaluation_error_message
                 : submission.evaluation_error_message) || null,
+        aiReviewedAt: aiReviewedAtRaw ? toIsoTimestamp(aiReviewedAtRaw) : null,
+        teacherReviewed,
+        teacherReviewedAt: reviewedAtRaw ? toIsoTimestamp(reviewedAtRaw) : null,
         ...publicResult,
     };
 }
@@ -684,6 +706,7 @@ function sanitizeStudentSubmissionDetail(submission, files = []) {
     }
 
     const publicResult = pickSubmissionPublicResult(submission);
+    const teacherReviewed = hasTeacherReview(submission);
 
     return {
         id: serializeId(submission.id),
@@ -699,6 +722,15 @@ function sanitizeStudentSubmissionDetail(submission, files = []) {
         evaluationStatus: submission.evaluation_status,
         evaluationErrorMessage: submission.evaluation_error_message || null,
         attachments: files.map(sanitizeAttachment),
+        // Distinct AI / teacher review signals so the student UI can show both.
+        aiReviewedAt: submission.ai_reviewed_at
+            ? toIsoTimestamp(submission.ai_reviewed_at)
+            : null,
+        teacherReviewed,
+        teacherReviewedAt: submission.reviewed_at
+            ? toIsoTimestamp(submission.reviewed_at)
+            : null,
+        teacherReviewer: sanitizeTeacherSubmissionReviewer(submission),
         ...publicResult,
     };
 }
@@ -847,6 +879,9 @@ async function buildSoloChatSnapshot({
                 sizeBytes: attachment.size_bytes,
                 width: attachment.width ?? null,
                 height: attachment.height ?? null,
+                url: buildSoloChatSnapshotAttachmentUrl(
+                    serializeId(attachment.id),
+                ),
             };
 
             if (snapshotAttachment.kind === "text") {

@@ -155,7 +155,6 @@ function createClassActivityService(db) {
              ) showcase_counts
                  ON showcase_counts.activity_id = a.id
              WHERE a.class_id = ?
-               AND a.status <> 'draft'
              ORDER BY a.created_at DESC, a.id DESC`,
             classId,
         );
@@ -196,6 +195,7 @@ function createClassActivityService(db) {
                      LIMIT 1
                  )
              WHERE a.class_id = ?
+               AND a.status <> 'draft'
              ORDER BY a.created_at DESC, a.id DESC`,
             userId,
             userId,

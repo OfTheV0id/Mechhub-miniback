@@ -437,6 +437,45 @@ function createSoloChatGradingService(options = {}) {
         };
     }
 
+    // Same as getTaskDetailForUser but allows owner OR teacher viewing snapshot.
+    async function getTaskDetailForViewer({ taskId, userId }) {
+        const task = await getTaskByIdForViewer(taskId, userId);
+        if (!task) {
+            throw notFound("Grading task not found");
+        }
+
+        const allAttachments = await listTaskFiles(task.id);
+        const annotations = await listTaskAnnotations(task.id);
+        const attachments = allAttachments.filter(
+            (attachment) => attachment.role === "image",
+        );
+
+        return {
+            ...hydrateTaskSummary(task, new Map([[task.id, annotations.length]])),
+            attachments,
+            annotations,
+        };
+    }
+
+    async function getTaskSummaryForViewer({ taskId, userId }) {
+        const task = await getTaskByIdForViewer(taskId, userId);
+        if (!task) {
+            throw notFound("Grading task not found");
+        }
+
+        const annotationCountRow = await db.get(
+            `SELECT COUNT(*) AS count
+             FROM solochat_grading_annotations
+             WHERE task_id = ?`,
+            task.id,
+        );
+
+        return hydrateTaskSummary(
+            task,
+            new Map([[task.id, Number(annotationCountRow?.count || 0)]]),
+        );
+    }
+
     async function retryTask({ taskId, userId }) {
         const task = await getTaskByIdForUser(taskId, userId);
         if (!task) {
@@ -795,6 +834,40 @@ function createSoloChatGradingService(options = {}) {
         );
     }
 
+    // Owner OR teacher in the class hosting an activity workspace / assignment
+    // submission whose source conversation is this task's conversation.
+    async function getTaskByIdForViewer(taskId, userId) {
+        return db.get(
+            `SELECT t.id, t.conversation_id, t.user_id, t.message_id, t.prompt_text, t.generated_title, t.status, t.error_message, t.selected_image_count, t.created_at, t.started_at, t.completed_at
+             FROM solochat_grading_tasks t
+             WHERE t.id = ?
+               AND (
+                    t.user_id = ?
+                    OR EXISTS (
+                        SELECT 1
+                        FROM class_activity_workspaces caw
+                        INNER JOIN class_activities ca ON ca.id = caw.activity_id
+                        INNER JOIN class_members cm
+                            ON cm.class_id = ca.class_id AND cm.user_id = ?
+                        WHERE caw.conversation_id = t.conversation_id AND cm.role = 'teacher'
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM assignment_submissions asub
+                        INNER JOIN assignments a ON a.id = asub.assignment_id
+                        INNER JOIN class_members cm
+                            ON cm.class_id = a.class_id AND cm.user_id = ?
+                        WHERE asub.source_conversation_id = t.conversation_id AND cm.role = 'teacher'
+                    )
+               )
+             LIMIT 1`,
+            taskId,
+            userId,
+            userId,
+            userId,
+        );
+    }
+
     async function getGradingMessageForTask(taskId) {
         const task = await getTaskSummaryById(taskId);
         if (!task?.messageId) {
@@ -928,7 +1001,9 @@ function createSoloChatGradingService(options = {}) {
         createTask,
         getGradingMessageForTaskForUser,
         getTaskSummaryForUser,
+        getTaskSummaryForViewer,
         getTaskDetailForUser,
+        getTaskDetailForViewer,
         listTasksForConversation,
         retryTask,
         abortTasksForConversation,

@@ -567,31 +567,39 @@ function createAssignmentService(db) {
     }) {
         return db.get(
             `SELECT
-                 id,
-                 assignment_id,
-                 user_id,
-                 answer_text,
-                 source_conversation_id,
-                 solochat_snapshot_json,
-                 submission_version,
-                 submitted_at,
-                 evaluation_status,
-                 evaluation_error_message,
-                 ai_score,
-                 ai_feedback_markdown,
-                 ai_feedback_json,
-                 ai_reviewed_at,
-                 final_score,
-                 final_feedback_markdown,
-                 is_teacher_overridden,
-                 reviewer_user_id,
-                 reviewed_at,
-                 created_at,
-                 updated_at
-             FROM assignment_submissions
-             WHERE assignment_id = ?
-               AND id = ?
-               AND user_id = ?`,
+                 s.id,
+                 s.assignment_id,
+                 s.user_id,
+                 s.answer_text,
+                 s.source_conversation_id,
+                 s.solochat_snapshot_json,
+                 s.submission_version,
+                 s.submitted_at,
+                 s.evaluation_status,
+                 s.evaluation_error_message,
+                 s.ai_score,
+                 s.ai_feedback_markdown,
+                 s.ai_feedback_json,
+                 s.ai_reviewed_at,
+                 s.final_score,
+                 s.final_feedback_markdown,
+                 s.is_teacher_overridden,
+                 s.reviewer_user_id,
+                 s.reviewed_at,
+                 s.created_at,
+                 s.updated_at,
+                 reviewer.email AS reviewer_email,
+                 reviewer.display_name AS reviewer_display_name,
+                 reviewer.avatar_url AS reviewer_avatar_url,
+                 reviewer.bio AS reviewer_bio,
+                 reviewer.default_role AS reviewer_default_role,
+                 reviewer.created_at AS reviewer_created_at
+             FROM assignment_submissions s
+             LEFT JOIN users reviewer
+                 ON reviewer.id = s.reviewer_user_id
+             WHERE s.assignment_id = ?
+               AND s.id = ?
+               AND s.user_id = ?`,
             assignmentId,
             submissionId,
             userId,
@@ -662,9 +670,11 @@ function createAssignmentService(db) {
                  evaluation_error_message,
                  ai_score,
                  ai_feedback_markdown,
+                 ai_reviewed_at,
                  final_score,
                  final_feedback_markdown,
                  is_teacher_overridden,
+                 reviewer_user_id,
                  reviewed_at
              FROM assignment_submissions
              WHERE assignment_id = ? AND user_id = ?

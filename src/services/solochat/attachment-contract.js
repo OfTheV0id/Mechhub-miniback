@@ -152,6 +152,10 @@ function buildSoloChatPreviewTextUrl(attachmentId) {
     return `${buildSoloChatAttachmentUrl(attachmentId)}/preview-text`;
 }
 
+function buildSoloChatSnapshotAttachmentUrl(attachmentId) {
+    return `/solochat/snapshot-attachments/${attachmentId}`;
+}
+
 module.exports = {
     SOLOCHAT_BINARY_DOCUMENT_EXTENSIONS,
     SOLOCHAT_BINARY_DOCUMENT_MIME_TYPES,
@@ -160,6 +164,7 @@ module.exports = {
     SOLOCHAT_DOCUMENT_PREVIEW_MAX_CHARS,
     buildSoloChatAttachmentUrl,
     buildSoloChatPreviewTextUrl,
+    buildSoloChatSnapshotAttachmentUrl,
     isAllowedSoloChatBinaryDocument,
     isAllowedSoloChatDocument,
     isSoloChatBinaryDocumentFileName,
