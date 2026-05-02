@@ -62,6 +62,7 @@ async function prepareDb(db) {
     `);
 
     await ensureUserProfileColumns(db);
+    await ensureUserAuthAccountTables(db);
     await ensureSoloChatTables(db);
     await ensureClassTables(db);
     await migrateLegacyAssignmentAndUploadTables(db);
@@ -117,6 +118,27 @@ async function ensureUserProfileColumns(db) {
             `ALTER TABLE users ADD COLUMN default_role TEXT NOT NULL DEFAULT 'student'`,
         );
     }
+}
+
+async function ensureUserAuthAccountTables(db) {
+    await db.exec(`
+        CREATE TABLE IF NOT EXISTS user_auth_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            provider_user_id TEXT NOT NULL,
+            email TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
+            updated_at TEXT NOT NULL DEFAULT (${SQLITE_NOW_ISO_EXPRESSION}),
+            UNIQUE (provider, provider_user_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+    `);
+
+    await db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_user_auth_accounts_user
+        ON user_auth_accounts(user_id, provider)
+    `);
 }
 
 async function ensureSoloChatTables(db) {
